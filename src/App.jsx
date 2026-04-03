@@ -94,7 +94,7 @@ async function callGemini(dishName, effortLevel, ingredientNames) {
   const prompt = `Eres un asistente de cocina español. Para el plato "${dishName}" con nivel de esfuerzo ${effortDesc}, selecciona los ingredientes necesarios de esta lista exacta: ${ingredientNames.join(', ')}. Responde ÚNICAMENTE con un array JSON de nombres exactos tal como aparecen en la lista, sin añadir ningún ingrediente que no esté en la lista. Ejemplo: ["Pasta (espaguetis)", "Tomate triturado (lata)", "Ajo"]`
 
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite-preview-06-17:generateContent?key=${apiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
