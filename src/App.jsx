@@ -616,6 +616,7 @@ export default function App() {
   const [shoppingHistory, setShoppingHistory] = useState([])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [savingList, setSavingList] = useState(false)
+  const [listCleared, setListCleared] = useState(false)
   const initDone = useRef(false)
 
   const weekKey = getWeekKey(weekOffset)
@@ -823,6 +824,7 @@ export default function App() {
   const totalItems = shoppingList.reduce((acc, cat) => acc + cat.items.length, 0)
 
   function togglePurchased(id) {
+    setListCleared(false)
     setPurchasedIds((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
@@ -848,6 +850,7 @@ export default function App() {
         items: itemsToSave,
       })
       setPurchasedIds(new Set())
+      setListCleared(true)
       showToast('Lista guardada en historial ✓')
       if (historyOpen) loadShoppingHistory()
     } catch (e) {
@@ -990,7 +993,15 @@ export default function App() {
               </div>
             </div>
             <div className="sidebar-body">
-              {shoppingList.length === 0 ? (
+              {listCleared ? (
+                <div className="sidebar-empty">
+                  <div style={{ fontSize: 32 }}>✓</div>
+                  <div style={{ marginTop: 8, fontWeight: 600, color: 'var(--text)' }}>Lista guardada</div>
+                  <div style={{ marginTop: 4, fontSize: 12 }}>
+                    Consulta el historial con el icono del reloj
+                  </div>
+                </div>
+              ) : shoppingList.length === 0 ? (
                 <p className="sidebar-empty">
                   Añade platos al tablero para ver los ingredientes aquí.
                 </p>
