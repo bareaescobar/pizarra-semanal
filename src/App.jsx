@@ -19,8 +19,9 @@ import {
   Trash2,
   Sparkles,
   Search,
+  History,
 } from 'lucide-react'
-import { dbGet, dbInsert, dbUpdate, dbDelete } from './supabase.js'
+import supabase, { dbGet, dbInsert, dbUpdate, dbDelete } from './supabase.js'
 import { INGREDIENT_CATEGORIES, DEFAULT_INGREDIENTS } from './ingredients.js'
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -31,6 +32,20 @@ const SLOTS = [
   { key: 'dinner', label: 'Cena' },
 ]
 const EFFORT_LABELS = { 1: '🟢 Fácil', 2: '🟡 Medio', 3: '🔴 Casero' }
+
+const CATEGORY_COLORS = {
+  'Verduras y Hortalizas':  '#16a34a',
+  'Frutas':                 '#db2777',
+  'Carnes':                 '#dc2626',
+  'Pescados y Mariscos':    '#2563eb',
+  'Lácteos y Huevos':       '#d97706',
+  'Legumbres y Cereales':   '#7c3aed',
+  'Pasta y Arroz':          '#ca8a04',
+  'Conservas y Preparados': '#0891b2',
+  'Condimentos y Especias': '#ea580c',
+  'Aceites y Vinagres':     '#65a30d',
+  'Otros':                  '#6b7280',
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -78,6 +93,26 @@ function isToday(date) {
     date.getMonth() === now.getMonth() &&
     date.getFullYear() === now.getFullYear()
   )
+}
+
+function slotRotation(slotId) {
+  let hash = 0
+  const str = String(slotId)
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash * 31 + str.charCodeAt(i)) & 0xffffffff
+  }
+  return (((hash % 1000) / 1000) * 5 - 2.5).toFixed(2)
+}
+
+function getDominantCategoryColor(ingredientIds, allIngredients) {
+  if (!ingredientIds?.length) return null
+  const counts = {}
+  for (const id of ingredientIds) {
+    const ing = allIngredients.find((i) => i.id === id)
+    if (ing) counts[ing.category] = (counts[ing.category] || 0) + 1
+  }
+  const dominant = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0]
+  return dominant ? (CATEGORY_COLORS[dominant] ?? null) : null
 }
 
 async function callGemini(dishName, effortLevel, ingredientNames) {
@@ -136,11 +171,17 @@ function DroppableCell({ id, children }) {
   )
 }
 
-function DraggablePostit({ slot, onEdit, onDelete }) {
+function DraggablePostit({ slot, ingredients, onEdit, onDelete }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: slot.id,
   })
-  const style = transform ? { transform: CSS.Translate.toString(transform) } : undefined
+  const borderColor = getDominantCategoryColor(slot.ingredient_ids, ingredients)
+  const rotation = slotRotation(slot.id)
+  const style = {
+    ...(transform ? { transform: CSS.Translate.toString(transform) } : {}),
+    '--base-rotate': `${rotation}deg`,
+    ...(borderColor ? { borderLeftColor: borderColor } : {}),
+  }
 
   return (
     <div
@@ -382,10 +423,32 @@ function DishModal({ mode, slot, dayIdx, slotKey, ingredients, slots, onClose, o
             </div>
 
             <div className="chips-area">
-              {filteredIngredients.map((ing) => (
+              {/* Selected chips at top */}
+              {filteredIngredients.filter((i) => selectedIds.includes(i.id)).map((ing) => (
                 <button
                   key={ing.id}
-                  className={`chip${selectedIds.includes(ing.id) ? ' selected' : ''}${(usageCount[ing.id] || 0) > 0 ? ' used' : ''}`}
+                  className={`chip selected${(usageCount[ing.id] || 0) > 0 ? ' used' : ''}`}
+                  onClick={() => toggleIngredient(ing.id)}
+                  title={usageCount[ing.id] ? `Usado en ${usageCount[ing.id]} plato(s)` : ''}
+                >
+                  {ing.name}
+                  {(usageCount[ing.id] || 0) > 0 && (
+                    <span className="chip-usage">{usageCount[ing.id]}</span>
+                  )}
+                </button>
+              ))}
+
+              {/* Separator between selected and unselected */}
+              {filteredIngredients.some((i) => selectedIds.includes(i.id)) &&
+               filteredIngredients.some((i) => !selectedIds.includes(i.id)) && (
+                <div className="chips-separator" />
+              )}
+
+              {/* Unselected chips */}
+              {filteredIngredients.filter((i) => !selectedIds.includes(i.id)).map((ing) => (
+                <button
+                  key={ing.id}
+                  className={`chip${(usageCount[ing.id] || 0) > 0 ? ' used' : ''}`}
                   onClick={() => toggleIngredient(ing.id)}
                   title={usageCount[ing.id] ? `Usado en ${usageCount[ing.id]} plato(s)` : ''}
                 >
@@ -472,6 +535,70 @@ function IngredientPopover({ ingredient, slots, position }) {
   )
 }
 
+// ─── ShoppingHistoryModal ────────────────────────────────────────────────────
+
+function ShoppingHistoryModal({ history, onClose }) {
+  const [expanded, setExpanded] = useState(null)
+
+  return (
+    <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="modal-header">
+          <h3>Historial de compras</h3>
+          <button className="modal-close" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body">
+          {history.length === 0 ? (
+            <p style={{ color: 'var(--text-muted)', fontSize: 13, textAlign: 'center', padding: '20px 0' }}>
+              No hay listas guardadas aún.
+            </p>
+          ) : (
+            history.map((entry) => {
+              const isOpen = expanded === entry.id
+              const date = new Date(entry.saved_at).toLocaleDateString('es-ES', {
+                day: 'numeric', month: 'long', year: 'numeric',
+                hour: '2-digit', minute: '2-digit',
+              })
+              const total = entry.items?.reduce((acc, cat) => acc + (cat.items?.length || 0), 0) || 0
+              return (
+                <div key={entry.id} className="history-entry">
+                  <button
+                    className="history-entry-header"
+                    onClick={() => setExpanded(isOpen ? null : entry.id)}
+                  >
+                    <div>
+                      <div className="history-entry-date">{date}</div>
+                      <div className="history-entry-meta">{total} ingredientes · semana {entry.week_key}</div>
+                    </div>
+                    <span className="history-entry-toggle">{isOpen ? '▲' : '▼'}</span>
+                  </button>
+                  {isOpen && (
+                    <div className="history-entry-body">
+                      {(entry.items || []).map((cat) => (
+                        <div key={cat.category} className="history-cat">
+                          <div className="history-cat-title">{cat.category}</div>
+                          {cat.items.map((item) => (
+                            <div key={item.id} className="history-cat-item">
+                              • {item.name}
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cerrar</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -486,6 +613,9 @@ export default function App() {
   const [popover, setPopover] = useState(null)
   const [toast, setToast] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [shoppingHistory, setShoppingHistory] = useState([])
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [savingList, setSavingList] = useState(false)
   const initDone = useRef(false)
 
   const weekKey = getWeekKey(weekOffset)
@@ -701,6 +831,51 @@ export default function App() {
     })
   }
 
+  async function handleSaveAndClear() {
+    if (savingList) return
+    setSavingList(true)
+    try {
+      const itemsToSave = shoppingList.map((cat) => ({
+        category: cat.category,
+        items: cat.items.map(({ ingredient }) => ({
+          id: ingredient.id,
+          name: ingredient.name,
+        })),
+      }))
+      await dbInsert('v2_shopping_lists', {
+        week_key: weekKey,
+        saved_at: new Date().toISOString(),
+        items: itemsToSave,
+      })
+      setPurchasedIds(new Set())
+      showToast('Lista guardada en historial ✓')
+      if (historyOpen) loadShoppingHistory()
+    } catch (e) {
+      showToast('Error al guardar lista: ' + e.message)
+    } finally {
+      setSavingList(false)
+    }
+  }
+
+  async function loadShoppingHistory() {
+    try {
+      const { data, error } = await supabase
+        .from('v2_shopping_lists')
+        .select('*')
+        .order('saved_at', { ascending: false })
+        .limit(20)
+      if (error) throw error
+      setShoppingHistory(data)
+    } catch (e) {
+      showToast('Error al cargar historial: ' + e.message)
+    }
+  }
+
+  function handleOpenHistory() {
+    setHistoryOpen(true)
+    loadShoppingHistory()
+  }
+
   const activeSlot = activeId ? slots.find((s) => s.id === activeId) : null
 
   if (loading) {
@@ -763,6 +938,7 @@ export default function App() {
                           <DraggablePostit
                             key={s.id}
                             slot={s}
+                            ingredients={ingredients}
                             onEdit={() => setEditModal(s)}
                             onDelete={handleDelete}
                           />
@@ -804,9 +980,14 @@ export default function App() {
                 Lista de la compra
                 {totalItems > 0 && <span className="sidebar-count">({totalItems})</span>}
               </h2>
-              <button className="sidebar-mobile-close modal-close" onClick={() => setShoppingOpen(false)}>
-                <X size={18} />
-              </button>
+              <div className="sidebar-actions">
+                <button className="sidebar-icon-btn" title="Historial de listas" onClick={handleOpenHistory}>
+                  <History size={16} />
+                </button>
+                <button className="sidebar-mobile-close modal-close" onClick={() => setShoppingOpen(false)}>
+                  <X size={18} />
+                </button>
+              </div>
             </div>
             <div className="sidebar-body">
               {shoppingList.length === 0 ? (
@@ -839,8 +1020,12 @@ export default function App() {
                     </div>
                   ))}
                   {purchasedIds.size > 0 && (
-                    <button className="btn-clear-purchased" onClick={() => setPurchasedIds(new Set())}>
-                      Limpiar comprados ({purchasedIds.size})
+                    <button
+                      className="btn-clear-purchased"
+                      onClick={handleSaveAndClear}
+                      disabled={savingList}
+                    >
+                      {savingList ? 'Guardando…' : `Guardar y limpiar (${purchasedIds.size})`}
                     </button>
                   )}
                 </>
@@ -884,6 +1069,13 @@ export default function App() {
           ingredient={popover.ingredient}
           slots={slots}
           position={popover.position}
+        />
+      )}
+
+      {historyOpen && (
+        <ShoppingHistoryModal
+          history={shoppingHistory}
+          onClose={() => setHistoryOpen(false)}
         />
       )}
 
