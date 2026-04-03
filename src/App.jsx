@@ -616,8 +616,14 @@ export default function App() {
   const [shoppingHistory, setShoppingHistory] = useState([])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [savingList, setSavingList] = useState(false)
-  const [clearedWeek, setClearedWeek] = useState(null)
+  const [clearedWeek, setClearedWeekRaw] = useState(() => localStorage.getItem('clearedWeek') || null)
   const listCleared = clearedWeek === weekKey
+
+  function setClearedWeek(val) {
+    setClearedWeekRaw(val)
+    if (val) localStorage.setItem('clearedWeek', val)
+    else localStorage.removeItem('clearedWeek')
+  }
   const initDone = useRef(false)
 
   const weekKey = getWeekKey(weekOffset)
