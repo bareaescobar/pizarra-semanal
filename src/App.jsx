@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import {
   DndContext,
   DragOverlay,
@@ -18,8 +18,9 @@ import {
   Pencil,
   Trash2,
   Sparkles,
+  Search,
 } from 'lucide-react'
-import { dbGet, dbInsert, dbUpdate, dbDelete, dbUpsert } from './supabase.js'
+import { dbGet, dbInsert, dbUpdate, dbDelete } from './supabase.js'
 import { INGREDIENT_CATEGORIES, DEFAULT_INGREDIENTS } from './ingredients.js'
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -47,7 +48,6 @@ function getWeekKey(offset = 0) {
 }
 
 function getMondayFromKey(weekKey) {
-  // key: YYYY-W{n}-{M}-{D}
   const parts = weekKey.split('-')
   const year = parseInt(parts[0])
   const month = parseInt(parts[2]) - 1
@@ -91,10 +91,15 @@ async function callGemini(dishName, effortLevel, ingredientNames) {
       ? 'medio (mezcla de frescos y preparados)'
       : 'casero (todo desde cero con ingredientes frescos)'
 
-  const prompt = `Eres un asistente de cocina español. Para el plato "${dishName}" con nivel de esfuerzo ${effortDesc}, selecciona los ingredientes necesarios de esta lista exacta: ${ingredientNames.join(', ')}. Responde ÚNICAMENTE con un array JSON de nombres exactos tal como aparecen en la lista, sin añadir ningún ingrediente que no esté en la lista. Ejemplo: ["Pasta (espaguetis)", "Tomate triturado (lata)", "Ajo"]`
+  const prompt = `Eres un asistente de cocina español. Para el plato "${dishName}" con nivel de esfuerzo ${effortDesc}, necesito dos cosas:
+1. Ingredientes de esta lista que se necesitan para el plato: ${ingredientNames.join(', ')}
+2. Ingredientes adicionales importantes para este plato que NO aparecen en la lista anterior (máximo 5, nombres simples en español)
+
+Responde ÚNICAMENTE con este JSON (sin texto adicional):
+{"existing": ["nombre exacto tal como aparece en la lista", ...], "new": ["ingrediente nuevo en español", ...]}`
 
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -113,18 +118,19 @@ async function callGemini(dishName, effortLevel, ingredientNames) {
   const data = await res.json()
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text
   if (!text) throw new Error('Respuesta vacía de Gemini')
-  return JSON.parse(text)
+  const parsed = JSON.parse(text)
+  return {
+    existing: Array.isArray(parsed.existing) ? parsed.existing : [],
+    new: Array.isArray(parsed.new) ? parsed.new : [],
+  }
 }
 
 // ─── DnD components ───────────────────────────────────────────────────────────
 
-function DroppableCell({ id, children, className }) {
+function DroppableCell({ id, children }) {
   const { setNodeRef, isOver } = useDroppable({ id })
   return (
-    <div
-      ref={setNodeRef}
-      className={`board-cell${isOver ? ' drag-over' : ''}${className ? ' ' + className : ''}`}
-    >
+    <div ref={setNodeRef} className={`board-cell${isOver ? ' drag-over' : ''}`}>
       {children}
     </div>
   )
@@ -134,9 +140,7 @@ function DraggablePostit({ slot, onEdit, onDelete }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: slot.id,
   })
-  const style = transform
-    ? { transform: CSS.Translate.toString(transform) }
-    : undefined
+  const style = transform ? { transform: CSS.Translate.toString(transform) } : undefined
 
   return (
     <div
@@ -179,10 +183,7 @@ function PostitContent({ slot, onEdit, onDelete }) {
       <div className="postit-footer">
         <div className="effort-dots">
           {[1, 2, 3].map((n) => (
-            <div
-              key={n}
-              className={`effort-dot${n <= effort ? ` active-${effort}` : ''}`}
-            />
+            <div key={n} className={`effort-dot${n <= effort ? ` active-${effort}` : ''}`} />
           ))}
         </div>
       </div>
@@ -190,17 +191,16 @@ function PostitContent({ slot, onEdit, onDelete }) {
   )
 }
 
-// ─── DishModal (shared for Add and Edit) ─────────────────────────────────────
+// ─── DishModal ────────────────────────────────────────────────────────────────
 
-function DishModal({ mode, slot, dayIdx, slotKey, ingredients, onClose, onSave }) {
+function DishModal({ mode, slot, dayIdx, slotKey, ingredients, slots, onClose, onSave, onIngredientAdded }) {
   const [dishName, setDishName] = useState(mode === 'edit' ? slot.dish_name : '')
-  const [effort, setEffort] = useState(
-    mode === 'edit' ? (slot.effort_override || 1) : 1
-  )
-  const [selectedIds, setSelectedIds] = useState(
-    mode === 'edit' ? (slot.ingredient_ids || []) : []
-  )
+  const [effort, setEffort] = useState(mode === 'edit' ? (slot.effort_override || 1) : 1)
+  const [selectedIds, setSelectedIds] = useState(mode === 'edit' ? (slot.ingredient_ids || []) : [])
+  const [search, setSearch] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
+  const [addingCustom, setAddingCustom] = useState(false)
+  const [aiNewSuggestions, setAiNewSuggestions] = useState([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const inputRef = useRef(null)
@@ -209,27 +209,85 @@ function DishModal({ mode, slot, dayIdx, slotKey, ingredients, onClose, onSave }
     setTimeout(() => inputRef.current?.focus(), 80)
   }, [])
 
+  // Calcular uso de cada ingrediente en los slots actuales
+  const usageCount = useMemo(() => {
+    const map = {}
+    for (const s of slots) {
+      for (const id of s.ingredient_ids || []) {
+        map[id] = (map[id] || 0) + 1
+      }
+    }
+    return map
+  }, [slots])
+
+  // Ordenar por uso DESC, luego alfabético; filtrar por búsqueda
+  const filteredIngredients = useMemo(() => {
+    const q = search.toLowerCase().trim()
+    const sorted = [...ingredients].sort((a, b) => {
+      const ua = usageCount[a.id] || 0
+      const ub = usageCount[b.id] || 0
+      if (ub !== ua) return ub - ua
+      return a.name.localeCompare(b.name, 'es')
+    })
+    if (!q) return sorted
+    return sorted.filter((i) => i.name.toLowerCase().includes(q))
+  }, [ingredients, usageCount, search])
+
+  const exactMatch = search.trim()
+    ? ingredients.some((i) => i.name.toLowerCase() === search.toLowerCase().trim())
+    : true
+
   const toggleIngredient = (id) => {
     setSelectedIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     )
   }
 
+  const handleAddCustom = async () => {
+    const name = search.trim()
+    if (!name || addingCustom) return
+    setAddingCustom(true)
+    try {
+      const newIng = await dbInsert('v2_ingredients', { name, category: 'Otros', is_custom: true })
+      onIngredientAdded(newIng)
+      setSelectedIds((prev) => [...prev, newIng.id])
+      setSearch('')
+    } catch (e) {
+      setError('Error al añadir ingrediente: ' + e.message)
+    } finally {
+      setAddingCustom(false)
+    }
+  }
+
   const handleAiSuggest = async () => {
     if (!dishName.trim()) return
     setAiLoading(true)
     setError(null)
+    setAiNewSuggestions([])
     try {
       const names = ingredients.map((i) => i.name)
-      const suggested = await callGemini(dishName.trim(), effort, names)
-      const suggestedIds = ingredients
-        .filter((i) => suggested.includes(i.name))
-        .map((i) => i.id)
+      const { existing, new: newSuggestions } = await callGemini(dishName.trim(), effort, names)
+      const suggestedIds = ingredients.filter((i) => existing.includes(i.name)).map((i) => i.id)
       setSelectedIds(suggestedIds)
+      const trulyNew = newSuggestions.filter(
+        (name) => !ingredients.some((i) => i.name.toLowerCase() === name.toLowerCase())
+      )
+      setAiNewSuggestions(trulyNew)
     } catch (e) {
       setError('Error al contactar Gemini: ' + e.message)
     } finally {
       setAiLoading(false)
+    }
+  }
+
+  const handleAddAiNew = async (name) => {
+    try {
+      const newIng = await dbInsert('v2_ingredients', { name, category: 'Otros', is_custom: true })
+      onIngredientAdded(newIng)
+      setSelectedIds((prev) => [...prev, newIng.id])
+      setAiNewSuggestions((prev) => prev.filter((n) => n !== name))
+    } catch (e) {
+      setError('Error al añadir: ' + e.message)
     }
   }
 
@@ -247,7 +305,7 @@ function DishModal({ mode, slot, dayIdx, slotKey, ingredients, onClose, onSave }
   }
 
   const title = mode === 'edit' ? 'Editar plato' : 'Añadir plato'
-  const dayLabel = mode === 'add' ? ` — ${DAYS[dayIdx]}, ${SLOTS.find(s => s.key === slotKey)?.label}` : ''
+  const dayLabel = mode === 'add' ? ` — ${DAYS[dayIdx]}, ${SLOTS.find((s) => s.key === slotKey)?.label}` : ''
 
   return (
     <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
@@ -286,9 +344,9 @@ function DishModal({ mode, slot, dayIdx, slotKey, ingredients, onClose, onSave }
             </div>
           </div>
 
-          {/* AI */}
+          {/* Ingredientes */}
           <div className="form-field">
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
               <label className="form-label">Ingredientes</label>
               <button
                 className="ai-suggest-btn"
@@ -307,24 +365,77 @@ function DishModal({ mode, slot, dayIdx, slotKey, ingredients, onClose, onSave }
               </div>
             )}
 
-            <div className="chips-area">
-              {INGREDIENT_CATEGORIES.map((cat) => {
-                const catIngredients = ingredients.filter((i) => i.category === cat)
-                if (!catIngredients.length) return null
-                return catIngredients.map((ing) => (
-                  <button
-                    key={ing.id}
-                    className={`chip${selectedIds.includes(ing.id) ? ' selected' : ''}`}
-                    onClick={() => toggleIngredient(ing.id)}
-                  >
-                    {ing.name}
-                  </button>
-                ))
-              })}
+            {/* Buscador */}
+            <div className="ingredient-search-wrap">
+              <Search size={14} className="ingredient-search-icon" />
+              <input
+                className="ingredient-search"
+                placeholder="Buscar ingrediente…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              {search && (
+                <button className="ingredient-search-clear" onClick={() => setSearch('')}>
+                  <X size={12} />
+                </button>
+              )}
             </div>
+
+            <div className="chips-area">
+              {filteredIngredients.map((ing) => (
+                <button
+                  key={ing.id}
+                  className={`chip${selectedIds.includes(ing.id) ? ' selected' : ''}${(usageCount[ing.id] || 0) > 0 ? ' used' : ''}`}
+                  onClick={() => toggleIngredient(ing.id)}
+                  title={usageCount[ing.id] ? `Usado en ${usageCount[ing.id]} plato(s)` : ''}
+                >
+                  {ing.name}
+                  {(usageCount[ing.id] || 0) > 0 && (
+                    <span className="chip-usage">{usageCount[ing.id]}</span>
+                  )}
+                </button>
+              ))}
+
+              {search.trim() && !exactMatch && (
+                <button
+                  className="chip chip-add-custom"
+                  onClick={handleAddCustom}
+                  disabled={addingCustom}
+                >
+                  <Plus size={11} />
+                  {addingCustom ? 'Añadiendo…' : `Añadir "${search.trim()}"`}
+                </button>
+              )}
+
+              {filteredIngredients.length === 0 && !search.trim() && (
+                <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>No hay ingredientes</span>
+              )}
+
+              {aiNewSuggestions.length > 0 && (
+                <div className="ai-new-section">
+                  <span className="ai-new-label">✨ Sugeridos por IA — no están en tu lista</span>
+                  {aiNewSuggestions.map((name) => (
+                    <button
+                      key={name}
+                      className="chip chip-ai-new"
+                      onClick={() => handleAddAiNew(name)}
+                    >
+                      <Plus size={11} />
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {selectedIds.length > 0 && (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                {selectedIds.length} ingrediente{selectedIds.length !== 1 ? 's' : ''} seleccionado{selectedIds.length !== 1 ? 's' : ''}
+              </div>
+            )}
           </div>
 
-          {error && <div style={{ color: '#f87171', fontSize: 12 }}>{error}</div>}
+          {error && <div style={{ color: '#dc2626', fontSize: 12 }}>{error}</div>}
         </div>
 
         <div className="modal-footer">
@@ -352,10 +463,7 @@ function IngredientPopover({ ingredient, slots, position }) {
   if (!dishNames.length) return null
 
   return (
-    <div
-      className="popover"
-      style={{ top: position.y + 12, left: position.x }}
-    >
+    <div className="popover" style={{ top: position.y + 12, left: position.x }}>
       <div className="popover-title">{ingredient.name}</div>
       {dishNames.map((name, i) => (
         <div key={i} className="popover-dish">• {name}</div>
@@ -370,14 +478,15 @@ export default function App() {
   const [slots, setSlots] = useState([])
   const [ingredients, setIngredients] = useState([])
   const [weekOffset, setWeekOffset] = useState(0)
-  const [addModal, setAddModal] = useState(null) // {dayIdx, slotKey}
-  const [editModal, setEditModal] = useState(null) // slot
+  const [addModal, setAddModal] = useState(null)
+  const [editModal, setEditModal] = useState(null)
   const [shoppingOpen, setShoppingOpen] = useState(false)
   const [purchasedIds, setPurchasedIds] = useState(new Set())
-  const [activeId, setActiveId] = useState(null) // drag
-  const [popover, setPopover] = useState(null) // {ingredient, position}
+  const [activeId, setActiveId] = useState(null)
+  const [popover, setPopover] = useState(null)
   const [toast, setToast] = useState(null)
   const [loading, setLoading] = useState(true)
+  const initDone = useRef(false)
 
   const weekKey = getWeekKey(weekOffset)
 
@@ -385,9 +494,9 @@ export default function App() {
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   )
 
-  // ─── Init ───────────────────────────────────────────────────────────────────
-
   useEffect(() => {
+    if (initDone.current) return
+    initDone.current = true
     initApp()
   }, [])
 
@@ -399,7 +508,6 @@ export default function App() {
     try {
       let ings = await dbGet('v2_ingredients')
       if (!ings.length) {
-        // Seed
         const rows = DEFAULT_INGREDIENTS.map((i) => ({ ...i, is_custom: false }))
         for (const row of rows) {
           await dbInsert('v2_ingredients', row)
@@ -421,15 +529,10 @@ export default function App() {
         setSlots([])
         return
       }
-
-      // Load dish info for each slot
-      const dishIds = [...new Set(boardSlots.map((s) => s.dish_id))]
       const enriched = await Promise.all(
         boardSlots.map(async (s) => {
-          // Get dish name
           const dishes = await dbGet('v2_dishes', { id: s.dish_id })
           const dish = dishes[0]
-          // Get ingredient ids for this effort level
           const dishIngs = await dbGet('v2_dish_ingredients', {
             dish_id: s.dish_id,
             effort_level: s.effort_override || 1,
@@ -452,10 +555,11 @@ export default function App() {
     setTimeout(() => setToast(null), 4000)
   }
 
-  // ─── Add dish ───────────────────────────────────────────────────────────────
+  function handleIngredientAdded(newIng) {
+    setIngredients((prev) => [...prev, newIng])
+  }
 
   async function handleSaveDish({ dishName, effort, selectedIds, dayIdx, slotKey }) {
-    // Upsert dish
     let dish
     const existing = await dbGet('v2_dishes', { name: dishName })
     if (existing.length) {
@@ -464,8 +568,6 @@ export default function App() {
       dish = await dbInsert('v2_dishes', { name: dishName, effort_default: effort })
     }
 
-    // Upsert dish_ingredients for this effort level
-    // Delete existing for this dish+effort, then insert new
     const currentDishIngs = await dbGet('v2_dish_ingredients', {
       dish_id: dish.id,
       effort_level: effort,
@@ -481,7 +583,6 @@ export default function App() {
       })
     }
 
-    // Insert board slot
     const boardSlot = await dbInsert('v2_board_slots', {
       week_key: weekKey,
       day_idx: dayIdx,
@@ -491,34 +592,22 @@ export default function App() {
       effort_override: effort,
     })
 
-    // Update local state
     setSlots((prev) => [
       ...prev,
-      {
-        ...boardSlot,
-        dish_name: dishName,
-        ingredient_ids: selectedIds,
-      },
+      { ...boardSlot, dish_name: dishName, ingredient_ids: selectedIds },
     ])
   }
-
-  // ─── Edit dish ──────────────────────────────────────────────────────────────
 
   async function handleEditDish({ dishName, effort, selectedIds, slot }) {
     let dish
     if (dishName !== slot.dish_name) {
       const existing = await dbGet('v2_dishes', { name: dishName })
-      if (existing.length) {
-        dish = existing[0]
-      } else {
-        dish = await dbInsert('v2_dishes', { name: dishName, effort_default: effort })
-      }
+      dish = existing.length ? existing[0] : await dbInsert('v2_dishes', { name: dishName, effort_default: effort })
     } else {
       const dishes = await dbGet('v2_dishes', { id: slot.dish_id })
       dish = dishes[0]
     }
 
-    // Update dish_ingredients for this effort level
     const currentDishIngs = await dbGet('v2_dish_ingredients', {
       dish_id: dish.id,
       effort_level: effort,
@@ -534,13 +623,8 @@ export default function App() {
       })
     }
 
-    // Update board slot
-    await dbUpdate('v2_board_slots', slot.id, {
-      dish_id: dish.id,
-      effort_override: effort,
-    })
+    await dbUpdate('v2_board_slots', slot.id, { dish_id: dish.id, effort_override: effort })
 
-    // Update local state
     setSlots((prev) =>
       prev.map((s) =>
         s.id === slot.id
@@ -549,8 +633,6 @@ export default function App() {
       )
     )
   }
-
-  // ─── Delete slot ────────────────────────────────────────────────────────────
 
   async function handleDelete(slotId) {
     try {
@@ -561,22 +643,17 @@ export default function App() {
     }
   }
 
-  // ─── Drag & drop ────────────────────────────────────────────────────────────
-
   function handleDragStart({ active }) {
     setActiveId(active.id)
   }
 
   async function handleDragEnd({ active, over }) {
     setActiveId(null)
-    if (!over || active.id === over.id) return
-
+    if (!over) return
     const [newDayIdx, newSlotKey] = over.id.split('-')
     const slot = slots.find((s) => s.id === active.id)
     if (!slot) return
-
     if (String(slot.day_idx) === newDayIdx && slot.slot_key === newSlotKey) return
-
     try {
       await dbUpdate('v2_board_slots', slot.id, {
         day_idx: parseInt(newDayIdx),
@@ -585,17 +662,13 @@ export default function App() {
       })
       setSlots((prev) =>
         prev.map((s) =>
-          s.id === slot.id
-            ? { ...s, day_idx: parseInt(newDayIdx), slot_key: newSlotKey }
-            : s
+          s.id === slot.id ? { ...s, day_idx: parseInt(newDayIdx), slot_key: newSlotKey } : s
         )
       )
     } catch (e) {
       showToast('Error al mover plato: ' + e.message)
     }
   }
-
-  // ─── Shopping list ──────────────────────────────────────────────────────────
 
   const shoppingList = (() => {
     const ingredientMap = {}
@@ -607,7 +680,6 @@ export default function App() {
         }
       }
     }
-
     const result = []
     for (const cat of INGREDIENT_CATEGORIES) {
       const items = ingredients
@@ -629,25 +701,21 @@ export default function App() {
     })
   }
 
-  // ─── Active slot for DragOverlay ────────────────────────────────────────────
-
   const activeSlot = activeId ? slots.find((s) => s.id === activeId) : null
-
-  // ─── Render ─────────────────────────────────────────────────────────────────
 
   if (loading) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: '#94a3b8' }}>
-        <div className="spinner" style={{ width: 32, height: 32, borderWidth: 3 }} />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', flexDirection: 'column', gap: 16, color: 'var(--text-muted)' }}>
+        <div className="spinner" style={{ width: 36, height: 36, borderWidth: 3 }} />
+        <span>Cargando pizarra…</span>
       </div>
     )
   }
 
   return (
     <div className="app">
-      {/* Header */}
       <header className="app-header">
-        <h1>📋 Pizarra Semanal</h1>
+        <h1>🗒️ Pizarra Semanal</h1>
         <div className="week-nav">
           <button onClick={() => setWeekOffset((w) => w - 1)} title="Semana anterior">
             <ChevronLeft size={16} />
@@ -657,7 +725,7 @@ export default function App() {
             <ChevronRight size={16} />
           </button>
           {weekOffset !== 0 && (
-            <button onClick={() => setWeekOffset(0)} style={{ fontSize: 11, padding: '3px 8px', width: 'auto' }}>
+            <button className="btn-today" onClick={() => setWeekOffset(0)}>
               Hoy
             </button>
           )}
@@ -665,15 +733,9 @@ export default function App() {
       </header>
 
       <div className="app-body">
-        {/* Board */}
         <div className="board-wrapper">
-          <DndContext
-            sensors={sensors}
-            onDragStart={handleDragStart}
-            onDragEnd={handleDragEnd}
-          >
+          <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
             <div className="board">
-              {/* Header row */}
               <div className="board-header-empty" />
               {DAYS.map((day, i) => {
                 const date = getDayDate(weekKey, i)
@@ -687,10 +749,9 @@ export default function App() {
                 )
               })}
 
-              {/* Slot rows */}
               {SLOTS.map((slot) => (
-                <>
-                  <div key={slot.key + '-label'} className="board-slot-label">{slot.label}</div>
+                <React.Fragment key={slot.key}>
+                  <div className="board-slot-label">{slot.label}</div>
                   {DAYS.map((_, dayIdx) => {
                     const cellId = `${dayIdx}-${slot.key}`
                     const cellSlots = slots.filter(
@@ -718,7 +779,7 @@ export default function App() {
                       </DroppableCell>
                     )
                   })}
-                </>
+                </React.Fragment>
               ))}
             </div>
 
@@ -732,7 +793,6 @@ export default function App() {
           </DndContext>
         </div>
 
-        {/* Sidebar */}
         <>
           {shoppingOpen && (
             <div className="sidebar-overlay" onClick={() => setShoppingOpen(false)} />
@@ -742,16 +802,9 @@ export default function App() {
               <h2>
                 <ShoppingCart size={16} />
                 Lista de la compra
-                {totalItems > 0 && (
-                  <span style={{ fontSize: 11, color: 'var(--accent-hover)', marginLeft: 4 }}>
-                    ({totalItems})
-                  </span>
-                )}
+                {totalItems > 0 && <span className="sidebar-count">({totalItems})</span>}
               </h2>
-              <button
-                className="sidebar-mobile-close modal-close"
-                onClick={() => setShoppingOpen(false)}
-              >
+              <button className="sidebar-mobile-close modal-close" onClick={() => setShoppingOpen(false)}>
                 <X size={18} />
               </button>
             </div>
@@ -770,10 +823,7 @@ export default function App() {
                           key={ingredient.id}
                           className={`shopping-item${purchasedIds.has(ingredient.id) ? ' purchased' : ''}`}
                           onMouseEnter={(e) =>
-                            setPopover({
-                              ingredient,
-                              position: { x: e.clientX, y: e.clientY },
-                            })
+                            setPopover({ ingredient, position: { x: e.clientX, y: e.clientY } })
                           }
                           onMouseLeave={() => setPopover(null)}
                         >
@@ -789,10 +839,7 @@ export default function App() {
                     </div>
                   ))}
                   {purchasedIds.size > 0 && (
-                    <button
-                      className="btn-clear-purchased"
-                      onClick={() => setPurchasedIds(new Set())}
-                    >
+                    <button className="btn-clear-purchased" onClick={() => setPurchasedIds(new Set())}>
                       Limpiar comprados ({purchasedIds.size})
                     </button>
                   )}
@@ -803,21 +850,21 @@ export default function App() {
         </>
       </div>
 
-      {/* FAB móvil */}
       <button className="fab" onClick={() => setShoppingOpen(true)} title="Lista de la compra">
         <ShoppingCart size={22} />
         {totalItems > 0 && <span className="fab-badge">{totalItems}</span>}
       </button>
 
-      {/* Modals */}
       {addModal && (
         <DishModal
           mode="add"
           dayIdx={addModal.dayIdx}
           slotKey={addModal.slotKey}
           ingredients={ingredients}
+          slots={slots}
           onClose={() => setAddModal(null)}
           onSave={handleSaveDish}
+          onIngredientAdded={handleIngredientAdded}
         />
       )}
       {editModal && (
@@ -825,12 +872,13 @@ export default function App() {
           mode="edit"
           slot={editModal}
           ingredients={ingredients}
+          slots={slots}
           onClose={() => setEditModal(null)}
           onSave={handleEditDish}
+          onIngredientAdded={handleIngredientAdded}
         />
       )}
 
-      {/* Popover */}
       {popover && (
         <IngredientPopover
           ingredient={popover.ingredient}
@@ -839,7 +887,6 @@ export default function App() {
         />
       )}
 
-      {/* Toast */}
       {toast && <div className="toast">{toast}</div>}
     </div>
   )
