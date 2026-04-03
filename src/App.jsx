@@ -91,7 +91,12 @@ async function callGemini(dishName, effortLevel, ingredientNames) {
       ? 'medio (mezcla de frescos y preparados)'
       : 'casero (todo desde cero con ingredientes frescos)'
 
-  const prompt = `Eres un asistente de cocina español. Para el plato "${dishName}" con nivel de esfuerzo ${effortDesc}, selecciona los ingredientes necesarios de esta lista exacta: ${ingredientNames.join(', ')}. Responde ÚNICAMENTE con un array JSON de nombres exactos tal como aparecen en la lista, sin añadir ningún ingrediente que no esté en la lista. Ejemplo: ["Pasta (espaguetis)", "Tomate triturado (lata)", "Ajo"]`
+  const prompt = `Eres un asistente de cocina español. Para el plato "${dishName}" con nivel de esfuerzo ${effortDesc}, necesito dos cosas:
+1. Ingredientes de esta lista que se necesitan para el plato: ${ingredientNames.join(', ')}
+2. Ingredientes adicionales importantes para este plato que NO aparecen en la lista anterior (máximo 5, nombres simples en español)
+
+Responde ÚNICAMENTE con este JSON (sin texto adicional):
+{"existing": ["nombre exacto tal como aparece en la lista", ...], "new": ["ingrediente nuevo en español", ...]}`
 
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
@@ -113,7 +118,11 @@ async function callGemini(dishName, effortLevel, ingredientNames) {
   const data = await res.json()
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text
   if (!text) throw new Error('Respuesta vacía de Gemini')
-  return JSON.parse(text)
+  const parsed = JSON.parse(text)
+  return {
+    existing: Array.isArray(parsed.existing) ? parsed.existing : [],
+    new: Array.isArray(parsed.new) ? parsed.new : [],
+  }
 }
 
 // ─── DnD components ───────────────────────────────────────────────────────────
@@ -191,6 +200,7 @@ function DishModal({ mode, slot, dayIdx, slotKey, ingredients, slots, onClose, o
   const [search, setSearch] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
   const [addingCustom, setAddingCustom] = useState(false)
+  const [aiNewSuggestions, setAiNewSuggestions] = useState([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const inputRef = useRef(null)
@@ -253,15 +263,31 @@ function DishModal({ mode, slot, dayIdx, slotKey, ingredients, slots, onClose, o
     if (!dishName.trim()) return
     setAiLoading(true)
     setError(null)
+    setAiNewSuggestions([])
     try {
       const names = ingredients.map((i) => i.name)
-      const suggested = await callGemini(dishName.trim(), effort, names)
-      const suggestedIds = ingredients.filter((i) => suggested.includes(i.name)).map((i) => i.id)
+      const { existing, new: newSuggestions } = await callGemini(dishName.trim(), effort, names)
+      const suggestedIds = ingredients.filter((i) => existing.includes(i.name)).map((i) => i.id)
       setSelectedIds(suggestedIds)
+      const trulyNew = newSuggestions.filter(
+        (name) => !ingredients.some((i) => i.name.toLowerCase() === name.toLowerCase())
+      )
+      setAiNewSuggestions(trulyNew)
     } catch (e) {
       setError('Error al contactar Gemini: ' + e.message)
     } finally {
       setAiLoading(false)
+    }
+  }
+
+  const handleAddAiNew = async (name) => {
+    try {
+      const newIng = await dbInsert('v2_ingredients', { name, category: 'Otros', is_custom: true })
+      onIngredientAdded(newIng)
+      setSelectedIds((prev) => [...prev, newIng.id])
+      setAiNewSuggestions((prev) => prev.filter((n) => n !== name))
+    } catch (e) {
+      setError('Error al añadir: ' + e.message)
     }
   }
 
@@ -383,6 +409,22 @@ function DishModal({ mode, slot, dayIdx, slotKey, ingredients, slots, onClose, o
 
               {filteredIngredients.length === 0 && !search.trim() && (
                 <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>No hay ingredientes</span>
+              )}
+
+              {aiNewSuggestions.length > 0 && (
+                <div className="ai-new-section">
+                  <span className="ai-new-label">✨ Sugeridos por IA — no están en tu lista</span>
+                  {aiNewSuggestions.map((name) => (
+                    <button
+                      key={name}
+                      className="chip chip-ai-new"
+                      onClick={() => handleAddAiNew(name)}
+                    >
+                      <Plus size={11} />
+                      {name}
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
 

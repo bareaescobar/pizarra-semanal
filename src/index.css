@@ -826,6 +826,38 @@ html, body {
   background: #bfdbfe;
 }
 
+.chip-ai-new {
+  border-style: dashed;
+  border-color: #f59e0b;
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.chip-ai-new:hover {
+  background: #fde68a;
+  border-color: #d97706;
+}
+
+.ai-new-section {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  width: 100%;
+  padding-top: 8px;
+  border-top: 1.5px dashed var(--border);
+  margin-top: 4px;
+}
+
+.ai-new-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #d97706;
+  width: 100%;
+}
+
 /* ─── Buttons ─── */
 .btn {
   padding: 9px 20px;
