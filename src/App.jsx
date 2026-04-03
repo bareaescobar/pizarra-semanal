@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   DndContext,
   DragOverlay,
@@ -689,8 +689,8 @@ export default function App() {
 
               {/* Slot rows */}
               {SLOTS.map((slot) => (
-                <>
-                  <div key={slot.key + '-label'} className="board-slot-label">{slot.label}</div>
+                <React.Fragment key={slot.key}>
+                  <div className="board-slot-label">{slot.label}</div>
                   {DAYS.map((_, dayIdx) => {
                     const cellId = `${dayIdx}-${slot.key}`
                     const cellSlots = slots.filter(
@@ -718,7 +718,7 @@ export default function App() {
                       </DroppableCell>
                     )
                   })}
-                </>
+                </React.Fragment>
               ))}
             </div>
 
