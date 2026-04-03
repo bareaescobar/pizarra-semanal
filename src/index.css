@@ -14,31 +14,31 @@
 }
 
 :root {
-  --bg: #fef6e4;
-  --surface: #ffffff;
-  --surface2: #fdf0d0;
-  --surface3: #fde3b0;
-  --border: #e8d9c0;
-  --border-soft: #f0e4cc;
-  --text: #2c1a06;
-  --text-muted: #9b7a50;
-  --accent: #4a90d9;
-  --accent-hover: #2563eb;
-  --accent-light: #dbeafe;
-  --postit: #fef08a;
-  --postit-shadow: #ca8a04;
-  --green: #16a34a;
-  --green-light: #dcfce7;
-  --yellow: #d97706;
-  --yellow-light: #fef9c3;
-  --red: #dc2626;
-  --red-light: #fee2e2;
+  --bg: #ede8df;
+  --surface: #f7f3ec;
+  --surface2: #ede5d6;
+  --surface3: #e0d5c2;
+  --border: #bfb09a;
+  --border-soft: #d0c4ae;
+  --text: #2b1d0e;
+  --text-muted: #7a6347;
+  --accent: #7a5c38;
+  --accent-hover: #5c4020;
+  --accent-light: #e8dcc8;
+  --postit: #fdf0a0;
+  --postit-shadow: #c49a1a;
+  --green: #4a7030;
+  --green-light: #d8e8c8;
+  --yellow: #b87020;
+  --yellow-light: #f2e0c0;
+  --red: #943020;
+  --red-light: #eed0c8;
   --radius: 12px;
   --radius-lg: 18px;
   --radius-pill: 999px;
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
-  --shadow: 0 4px 12px rgba(0,0,0,0.1), 0 2px 4px rgba(0,0,0,0.06);
-  --shadow-lg: 0 10px 30px rgba(0,0,0,0.15), 0 4px 8px rgba(0,0,0,0.08);
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.10), 0 1px 2px rgba(0,0,0,0.06);
+  --shadow: 0 4px 12px rgba(0,0,0,0.12), 0 2px 4px rgba(0,0,0,0.08);
+  --shadow-lg: 0 10px 30px rgba(0,0,0,0.18), 0 4px 8px rgba(0,0,0,0.10);
 }
 
 html, body {
