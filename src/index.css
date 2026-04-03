@@ -1,6 +1,7 @@
 @font-face {
   font-family: 'Milk Choco';
-  src: url('/fonts/MilkChoco.ttf') format('truetype');
+  src: url('/fonts/MilkChoco.otf') format('opentype'),
+       url('/fonts/MilkChoco.ttf') format('truetype');
   font-weight: normal;
   font-style: normal;
   font-display: swap;
