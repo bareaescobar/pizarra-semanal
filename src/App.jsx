@@ -378,6 +378,7 @@ export default function App() {
   const [popover, setPopover] = useState(null) // {ingredient, position}
   const [toast, setToast] = useState(null)
   const [loading, setLoading] = useState(true)
+  const initDone = useRef(false)
 
   const weekKey = getWeekKey(weekOffset)
 
@@ -388,6 +389,8 @@ export default function App() {
   // ─── Init ───────────────────────────────────────────────────────────────────
 
   useEffect(() => {
+    if (initDone.current) return
+    initDone.current = true
     initApp()
   }, [])
 
