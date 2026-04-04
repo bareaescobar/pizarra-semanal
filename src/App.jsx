@@ -616,7 +616,14 @@ export default function App() {
   const [shoppingHistory, setShoppingHistory] = useState([])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [savingList, setSavingList] = useState(false)
-  const [listCleared, setListCleared] = useState(false)
+  const [clearedWeek, setClearedWeekRaw] = useState(() => localStorage.getItem('clearedWeek') || null)
+  const listCleared = clearedWeek === weekKey
+
+  function setClearedWeek(val) {
+    setClearedWeekRaw(val)
+    if (val) localStorage.setItem('clearedWeek', val)
+    else localStorage.removeItem('clearedWeek')
+  }
   const initDone = useRef(false)
 
   const weekKey = getWeekKey(weekOffset)
@@ -824,7 +831,6 @@ export default function App() {
   const totalItems = shoppingList.reduce((acc, cat) => acc + cat.items.length, 0)
 
   function togglePurchased(id) {
-    setListCleared(false)
     setPurchasedIds((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
@@ -850,7 +856,7 @@ export default function App() {
         items: itemsToSave,
       })
       setPurchasedIds(new Set())
-      setListCleared(true)
+      setClearedWeek(weekKey)
       showToast('Lista guardada en historial ✓')
       if (historyOpen) loadShoppingHistory()
     } catch (e) {
@@ -1000,6 +1006,12 @@ export default function App() {
                   <div style={{ marginTop: 4, fontSize: 12 }}>
                     Consulta el historial con el icono del reloj
                   </div>
+                  <button
+                    style={{ marginTop: 16, fontSize: 12, background: 'none', border: '1.5px solid var(--border)', borderRadius: 'var(--radius-pill)', padding: '4px 14px', cursor: 'pointer', color: 'var(--text-muted)', fontFamily: 'inherit' }}
+                    onClick={() => setClearedWeek(null)}
+                  >
+                    Volver a la lista
+                  </button>
                 </div>
               ) : shoppingList.length === 0 ? (
                 <p className="sidebar-empty">
