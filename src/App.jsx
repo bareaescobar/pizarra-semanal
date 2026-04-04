@@ -619,7 +619,7 @@ export default function App() {
   const [clearedWeek, setClearedWeekRaw] = useState(() => localStorage.getItem('clearedWeek') || null)
   const listCleared = clearedWeek === weekKey
 
-  function setClearedWeek(val) {
+  const setClearedWeek = (val) => {
     setClearedWeekRaw(val)
     if (val) localStorage.setItem('clearedWeek', val)
     else localStorage.removeItem('clearedWeek')
