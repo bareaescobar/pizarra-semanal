@@ -775,6 +775,10 @@ export default function App() {
 
   const [slots, setSlots] = useState([])
   const [ingredients, setIngredients] = useState([])
+  const [weekOffset, setWeekOffset] = useState(0)
+
+  const weekKey = getWeekKey(weekOffset)
+
   const [addModal, setAddModal] = useState(null)
   const [editModal, setEditModal] = useState(null)
   const [shoppingOpen, setShoppingOpen] = useState(false)
@@ -816,6 +820,7 @@ export default function App() {
   }
 
   const initDone = useRef(false)
+  
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
