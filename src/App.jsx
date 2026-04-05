@@ -20,6 +20,9 @@ import {
   Sparkles,
   Search,
   History,
+  Copy,
+  ChefHat,
+  Palette,
 } from 'lucide-react'
 import supabase, { dbGet, dbInsert, dbUpdate, dbDelete } from './supabase.js'
 import { INGREDIENT_CATEGORIES, DEFAULT_INGREDIENTS } from './ingredients.js'
@@ -44,8 +47,24 @@ const CATEGORY_COLORS = {
   'Conservas y Preparados': '#0891b2',
   'Condimentos y Especias': '#ea580c',
   'Aceites y Vinagres':     '#65a30d',
-  'Otros':                  '#6b7280',
+  'Guisos':                 '#92400e',
+  'Comer fuera':            '#6b7280',
+  'Otros':                  '#94a3b8',
 }
+
+// Types available in context-menu color picker
+const FOOD_TYPES = [
+  { key: 'Carnes',               label: 'Carnes',       emoji: '🥩' },
+  { key: 'Pescados y Mariscos',  label: 'Pescado',      emoji: '🐟' },
+  { key: 'Verduras y Hortalizas',label: 'Verduras',     emoji: '🥦' },
+  { key: 'Pasta y Arroz',        label: 'Hidratos',     emoji: '🍝' },
+  { key: 'Legumbres y Cereales', label: 'Legumbres',    emoji: '🫘' },
+  { key: 'Guisos',               label: 'Guisos',       emoji: '🍲' },
+  { key: 'Comer fuera',          label: 'Comer fuera',  emoji: '🍽️' },
+]
+
+// Categories that should NOT trigger consecutive-day warnings
+const ALERT_EXCLUDED = new Set(['Verduras y Hortalizas', 'Condimentos y Especias', 'Aceites y Vinagres', 'Frutas', 'Otros', null])
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -160,6 +179,62 @@ Responde ÚNICAMENTE con este JSON (sin texto adicional):
   }
 }
 
+async function callGeminiRecipe(dishName) {
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY
+  if (!apiKey) throw new Error('VITE_GEMINI_API_KEY no configurada')
+  const prompt = `Explica cómo preparar "${dishName}" de forma sencilla para un cocinero doméstico. Máximo 6 pasos cortos y claros. Responde en español, sin formato markdown, solo texto plano con pasos numerados.`
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+    }
+  )
+  if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err?.error?.message || `Error ${res.status}`) }
+  const data = await res.json()
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text
+  if (!text) throw new Error('Respuesta vacía')
+  return text.trim()
+}
+
+function getDietWarnings(slots, ingredients, colorOverrides) {
+  const dayCats = DAYS.map((_, dayIdx) => {
+    const daySlots = slots.filter((s) => s.day_idx === dayIdx)
+    if (!daySlots.length) return null
+    const counts = {}
+    for (const s of daySlots) {
+      const override = colorOverrides[s.id]
+      if (override) {
+        counts[override] = (counts[override] || 0) + 3
+      } else {
+        for (const ingId of s.ingredient_ids || []) {
+          const ing = ingredients.find((i) => i.id === ingId)
+          if (ing && !ALERT_EXCLUDED.has(ing.category)) {
+            counts[ing.category] = (counts[ing.category] || 0) + 1
+          }
+        }
+      }
+    }
+    if (!Object.keys(counts).length) return null
+    return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0]
+  })
+
+  const warnings = []
+  let runStart = 0
+  for (let i = 1; i <= 7; i++) {
+    const same = i < 7 && dayCats[i] === dayCats[runStart] && dayCats[runStart] && !ALERT_EXCLUDED.has(dayCats[runStart])
+    if (!same) {
+      const len = i - runStart
+      if (len >= 2 && dayCats[runStart] && !ALERT_EXCLUDED.has(dayCats[runStart])) {
+        warnings.push({ category: dayCats[runStart], days: DAYS.slice(runStart, i) })
+      }
+      runStart = i
+    }
+  }
+  return warnings
+}
+
 // ─── DnD components ───────────────────────────────────────────────────────────
 
 function DroppableCell({ id, children }) {
@@ -171,11 +246,10 @@ function DroppableCell({ id, children }) {
   )
 }
 
-function DraggablePostit({ slot, ingredients, onEdit, onDelete }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: slot.id,
-  })
-  const borderColor = getDominantCategoryColor(slot.ingredient_ids, ingredients)
+function DraggablePostit({ slot, ingredients, colorOverrides, onEdit, onDelete, onContextMenu }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: slot.id })
+  const overrideColor = colorOverrides?.[slot.id] ? CATEGORY_COLORS[colorOverrides[slot.id]] : null
+  const borderColor = overrideColor || getDominantCategoryColor(slot.ingredient_ids, ingredients)
   const rotation = slotRotation(slot.id)
   const style = {
     ...(transform ? { transform: CSS.Translate.toString(transform) } : {}),
@@ -190,6 +264,7 @@ function DraggablePostit({ slot, ingredients, onEdit, onDelete }) {
       {...listeners}
       {...attributes}
       className={`postit${isDragging ? ' dragging' : ''}`}
+      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onContextMenu(e, slot) }}
     >
       <PostitContent slot={slot} onEdit={onEdit} onDelete={onDelete} />
     </div>
@@ -599,9 +674,105 @@ function ShoppingHistoryModal({ history, onClose }) {
   )
 }
 
+// ─── PostitContextMenu ────────────────────────────────────────────────────────
+
+function PostitContextMenu({ menu, onRecipe, onCopy, onChangeType, onClose }) {
+  const [showTypes, setShowTypes] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose() }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [onClose])
+
+  return (
+    <div
+      ref={ref}
+      className="context-menu"
+      style={{ top: menu.y, left: menu.x }}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <button className="context-menu-item" onMouseDown={() => { onRecipe(menu.slot); onClose() }}>
+        <ChefHat size={13} /> Buscar receta IA
+      </button>
+      <button className="context-menu-item" onMouseDown={() => { onCopy(menu.slot); onClose() }}>
+        <Copy size={13} /> Copiar plato
+      </button>
+      <div style={{ position: 'relative' }}>
+        <button
+          className="context-menu-item"
+          onMouseDown={() => setShowTypes((v) => !v)}
+        >
+          <Palette size={13} /> Cambiar tipo ▸
+        </button>
+        {showTypes && (
+          <div className="context-submenu">
+            {FOOD_TYPES.map((ft) => (
+              <button
+                key={ft.key}
+                className="context-menu-item"
+                onMouseDown={() => { onChangeType(menu.slot.id, ft.key); onClose() }}
+              >
+                <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: CATEGORY_COLORS[ft.key], marginRight: 6 }} />
+                {ft.emoji} {ft.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── RecipeModal ──────────────────────────────────────────────────────────────
+
+function RecipeModal({ slot, onClose }) {
+  const [content, setContent] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    callGeminiRecipe(slot.dish_name)
+      .then(setContent)
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [slot.dish_name])
+
+  return (
+    <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="modal-header">
+          <h3>🍳 {slot.dish_name}</h3>
+          <button className="modal-close" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body">
+          {loading ? (
+            <div className="ai-loading"><div className="spinner" />Consultando IA…</div>
+          ) : error ? (
+            <p style={{ color: 'var(--red)', fontSize: 13 }}>{error}</p>
+          ) : (
+            <div className="recipe-content">
+              {content.split('\n').filter(Boolean).map((line, i) => (
+                <p key={i} style={{ marginBottom: 8, lineHeight: 1.6 }}>{line}</p>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cerrar</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 export default function App() {
+  const [weekOffset, setWeekOffset] = useState(0)
+  const weekKey = getWeekKey(weekOffset)
+
   const [slots, setSlots] = useState([])
   const [ingredients, setIngredients] = useState([])
   const [weekOffset, setWeekOffset] = useState(0)
@@ -621,14 +792,34 @@ export default function App() {
   const [savingList, setSavingList] = useState(false)
   const [clearedWeek, setClearedWeekRaw] = useState(() => localStorage.getItem('clearedWeek') || null)
   const listCleared = clearedWeek === weekKey
+  const [contextMenu, setContextMenu] = useState(null)
+  const [recipeModal, setRecipeModal] = useState(null)
+  const [copyingSlot, setCopyingSlot] = useState(null)
+  const [colorOverrides, setColorOverridesRaw] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('colorOverrides') || '{}') } catch { return {} }
+  })
+  const [customItems, setCustomItemsRaw] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('customItems') || '[]') } catch { return [] }
+  })
+  const [customInput, setCustomInput] = useState('')
 
   const setClearedWeek = (val) => {
     setClearedWeekRaw(val)
     if (val) localStorage.setItem('clearedWeek', val)
     else localStorage.removeItem('clearedWeek')
   }
-  const initDone = useRef(false)
+  const setColorOverrides = (val) => {
+    const next = typeof val === 'function' ? val(colorOverrides) : val
+    setColorOverridesRaw(next)
+    localStorage.setItem('colorOverrides', JSON.stringify(next))
+  }
+  const setCustomItems = (val) => {
+    const next = typeof val === 'function' ? val(customItems) : val
+    setCustomItemsRaw(next)
+    localStorage.setItem('customItems', JSON.stringify(next))
+  }
 
+  const initDone = useRef(false)
   
 
   const sensors = useSensors(
@@ -784,6 +975,43 @@ export default function App() {
     }
   }
 
+  async function handleCopySlot(dayIdx, slotKey) {
+    if (!copyingSlot) return
+    try {
+      await handleSaveDish({
+        dishName: copyingSlot.dish_name,
+        effort: copyingSlot.effort_override || 1,
+        selectedIds: copyingSlot.ingredient_ids || [],
+        slot: null,
+        dayIdx,
+        slotKey,
+      })
+      setCopyingSlot(null)
+      showToast('Plato copiado ✓')
+    } catch (e) {
+      showToast('Error al copiar: ' + e.message)
+    }
+  }
+
+  function handleChangeType(slotId, typeKey) {
+    setColorOverrides((prev) => ({ ...prev, [slotId]: typeKey }))
+  }
+
+  function addCustomItem(name) {
+    setCustomItems((prev) => [...prev, { id: Date.now().toString(), name }])
+  }
+  function removeCustomItem(id) {
+    setCustomItems((prev) => prev.filter((i) => i.id !== id))
+  }
+  function toggleCustomItem(id) {
+    setPurchasedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has('custom_' + id)) next.delete('custom_' + id)
+      else next.add('custom_' + id)
+      return next
+    })
+  }
+
   function handleDragStart({ active }) {
     setActiveId(active.id)
   }
@@ -889,6 +1117,7 @@ export default function App() {
   }
 
   const activeSlot = activeId ? slots.find((s) => s.id === activeId) : null
+  const dietWarnings = useMemo(() => getDietWarnings(slots, ingredients, colorOverrides), [slots, ingredients, colorOverrides])
 
   if (loading) {
     return (
@@ -921,6 +1150,22 @@ export default function App() {
 
       <div className="app-body">
         <div className="board-wrapper">
+          {copyingSlot && (
+            <div className="copy-banner">
+              <Copy size={14} />
+              Haz clic en "Añadir" para pegar <strong>{copyingSlot.dish_name}</strong>
+              <button onClick={() => setCopyingSlot(null)}><X size={13} /></button>
+            </div>
+          )}
+          {dietWarnings.length > 0 && (
+            <div className="diet-warnings">
+              {dietWarnings.map((w, i) => (
+                <div key={i} className="diet-warning">
+                  ⚠️ <strong>{w.category}</strong> varios días seguidos: {w.days.join(', ')}
+                </div>
+              ))}
+            </div>
+          )}
           <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
             <div className="board">
               <div className="board-header-empty" />
@@ -951,17 +1196,22 @@ export default function App() {
                             key={s.id}
                             slot={s}
                             ingredients={ingredients}
+                            colorOverrides={colorOverrides}
                             onEdit={() => setEditModal(s)}
                             onDelete={handleDelete}
+                            onContextMenu={(e, slot) => setContextMenu({ x: e.clientX, y: e.clientY, slot })}
                           />
                         ))}
                         <div className="board-cell-add">
                           <button
-                            className="btn-add-slot"
-                            onClick={() => setAddModal({ dayIdx, slotKey: slot.key })}
+                            className={`btn-add-slot${copyingSlot ? ' copy-target' : ''}`}
+                            onClick={() => copyingSlot
+                              ? handleCopySlot(dayIdx, slot.key)
+                              : setAddModal({ dayIdx, slotKey: slot.key })
+                            }
                           >
                             <Plus size={12} />
-                            <span>Añadir</span>
+                            <span>{copyingSlot ? 'Pegar aquí' : 'Añadir'}</span>
                           </button>
                         </div>
                       </DroppableCell>
@@ -1029,17 +1279,17 @@ export default function App() {
                         <div
                           key={ingredient.id}
                           className={`shopping-item${purchasedIds.has(ingredient.id) ? ' purchased' : ''}`}
-                          onMouseEnter={(e) =>
-                            setPopover({ ingredient, position: { x: e.clientX, y: e.clientY } })
-                          }
-                          onMouseLeave={() => setPopover(null)}
                         >
                           <input
                             type="checkbox"
                             checked={purchasedIds.has(ingredient.id)}
                             onChange={() => togglePurchased(ingredient.id)}
                           />
-                          <span className="shopping-item-name">{ingredient.name}</span>
+                          <span
+                            className="shopping-item-name"
+                            onMouseEnter={(e) => setPopover({ ingredient, position: { x: e.clientX, y: e.clientY } })}
+                            onMouseLeave={() => setPopover(null)}
+                          >{ingredient.name}</span>
                           <span className="shopping-item-dishes">{dishes.length}</span>
                         </div>
                       ))}
@@ -1056,6 +1306,48 @@ export default function App() {
                   )}
                 </>
               )}
+              {/* Custom items (always visible) */}
+              {customItems.length > 0 && (
+                <div className="shopping-category" style={{ marginTop: 12 }}>
+                  <div className="shopping-category-title">Otros artículos</div>
+                  {customItems.map((item) => (
+                    <div key={item.id} className={`shopping-item${purchasedIds.has('custom_' + item.id) ? ' purchased' : ''}`}>
+                      <input
+                        type="checkbox"
+                        checked={purchasedIds.has('custom_' + item.id)}
+                        onChange={() => toggleCustomItem(item.id)}
+                      />
+                      <span className="shopping-item-name">{item.name}</span>
+                      <button
+                        className="postit-btn delete"
+                        style={{ opacity: 0.5, flexShrink: 0 }}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={() => removeCustomItem(item.id)}
+                      ><X size={10} /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="custom-item-add">
+                <input
+                  type="text"
+                  className="custom-item-input"
+                  placeholder="Añadir artículo extra…"
+                  value={customInput}
+                  onChange={(e) => setCustomInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && customInput.trim()) {
+                      addCustomItem(customInput.trim())
+                      setCustomInput('')
+                    }
+                  }}
+                />
+                <button
+                  className="custom-item-btn"
+                  disabled={!customInput.trim()}
+                  onClick={() => { addCustomItem(customInput.trim()); setCustomInput('') }}
+                ><Plus size={13} /></button>
+              </div>
             </div>
           </aside>
         </>
@@ -1103,6 +1395,20 @@ export default function App() {
           history={shoppingHistory}
           onClose={() => setHistoryOpen(false)}
         />
+      )}
+
+      {contextMenu && (
+        <PostitContextMenu
+          menu={contextMenu}
+          onRecipe={(slot) => setRecipeModal(slot)}
+          onCopy={(slot) => { setCopyingSlot(slot); showToast(`Copiando "${slot.dish_name}" — elige dónde pegar`) }}
+          onChangeType={handleChangeType}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {recipeModal && (
+        <RecipeModal slot={recipeModal} onClose={() => setRecipeModal(null)} />
       )}
 
       {toast && <div className="toast">{toast}</div>}
