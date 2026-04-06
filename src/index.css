@@ -246,12 +246,12 @@ html, body {
 /* ─── Post-it ─── */
 .postit {
   background: var(--postit);
-  border-radius: 3px 10px 10px 3px;
-  border-left: 4px solid var(--postit-shadow);
+  border-radius: 8px;
+  border: 1.5px solid rgba(0,0,0,0.08);
   padding: 8px 6px 6px;
   position: relative;
   box-shadow: var(--shadow);
-  cursor: grab;
+  cursor: default;
   user-select: none;
   transform: rotate(var(--base-rotate, 0deg));
   transition: transform 0.2s, box-shadow 0.2s, opacity 0.15s;
@@ -271,9 +271,9 @@ html, body {
 
 .postit-overlay {
   background: var(--postit);
-  border-radius: 3px 10px 10px 3px;
-  border-left: 4px solid var(--postit-shadow);
-  padding: 8px 8px 6px;
+  border-radius: 8px;
+  border: 1.5px solid rgba(0,0,0,0.08);
+  padding: 8px 6px 6px;
   box-shadow: 6px 10px 24px rgba(0,0,0,0.25);
   transform: rotate(3deg) scale(1.06);
   pointer-events: none;
@@ -1312,6 +1312,66 @@ html, body {
 .custom-item-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* ─── Dishes tray ─── */
+.dishes-tray {
+  border-top: 2px dashed var(--border);
+  padding: 10px 16px 12px;
+  background: var(--surface2);
+}
+
+.dishes-tray-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.dishes-tray-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tray-dish {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 4px 8px 4px 10px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: default;
+  transition: border-color 0.15s, background 0.15s;
+  user-select: none;
+}
+
+.tray-dish:hover {
+  border-color: var(--accent);
+  background: var(--accent-light);
+}
+
+.tray-dish .drag-handle {
+  opacity: 0.5;
+}
+
+.tray-dish:hover .drag-handle {
+  opacity: 1;
+}
+
+.tray-dish-overlay {
+  background: var(--surface);
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius-pill);
+  padding: 4px 12px;
+  font-size: 12px;
+  box-shadow: 4px 6px 16px rgba(0,0,0,0.2);
+  pointer-events: none;
 }
 
 /* ─── Scrollbar ─── */
