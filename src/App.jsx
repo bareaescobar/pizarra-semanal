@@ -772,7 +772,7 @@ function PoolPostit({ item, ingredients, onUpdate, onDelete, onContextMenu }) {
   }
 
   // Adapt pool item to the slot shape expected by context menu
-  const slotLike = { id: item.id, dish_name: item.dish_name, ingredient_ids: [] }
+  const slotLike = { id: item.id, dish_name: item.dish_name, ingredient_ids: [], isPool: true }
 
   return (
     <div
@@ -798,6 +798,9 @@ function PoolPostit({ item, ingredients, onUpdate, onDelete, onContextMenu }) {
           </span>
         )}
         <div className="postit-actions">
+          <button className="postit-btn" onPointerDown={(e) => e.stopPropagation()} onClick={() => setEditing(true)} title="Editar nombre">
+            <Pencil size={11} />
+          </button>
           <button className="postit-btn delete" onPointerDown={(e) => e.stopPropagation()} onClick={onDelete}>
             <Trash2 size={11} />
           </button>
@@ -835,11 +838,9 @@ function PostitContextMenu({ menu, onRecipe, onCopy, onMove, onChangeType, onClo
       <button className="context-menu-item" onMouseDown={() => { onRecipe(menu.slot); onClose() }}>
         <ChefHat size={13} /> Buscar receta IA
       </button>
-      {!menu.isPool && (
-        <button className="context-menu-item" onMouseDown={() => { onMove(menu.slot); onClose() }}>
-          <ChevronRight size={13} /> Mover
-        </button>
-      )}
+      <button className="context-menu-item" onMouseDown={() => { onMove(menu.slot); onClose() }}>
+        <ChevronRight size={13} /> Mover
+      </button>
       {!menu.isPool && (
         <button className="context-menu-item" onMouseDown={() => { onCopy(menu.slot); onClose() }}>
           <Copy size={13} /> Copiar
@@ -1146,14 +1147,19 @@ export default function App() {
   async function handleMoveSlot(dayIdx, slotKey) {
     if (!movingSlot) return
     try {
-      await dbUpdate('v2_board_slots', movingSlot.id, {
-        day_idx: dayIdx,
-        slot_key: slotKey,
-        position: Date.now(),
-      })
-      setSlots((prev) => prev.map((s) =>
-        s.id === movingSlot.id ? { ...s, day_idx: dayIdx, slot_key: slotKey } : s
-      ))
+      if (movingSlot.isPool) {
+        await handleSaveDish({ dishName: movingSlot.dish_name, effort: 1, selectedIds: [], dayIdx, slotKey })
+        setPoolItems((prev) => prev.filter((p) => p.id !== movingSlot.id))
+      } else {
+        await dbUpdate('v2_board_slots', movingSlot.id, {
+          day_idx: dayIdx,
+          slot_key: slotKey,
+          position: Date.now(),
+        })
+        setSlots((prev) => prev.map((s) =>
+          s.id === movingSlot.id ? { ...s, day_idx: dayIdx, slot_key: slotKey } : s
+        ))
+      }
       setMovingSlot(null)
       showToast('Plato movido ✓')
     } catch (e) {
