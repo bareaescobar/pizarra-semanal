@@ -53,6 +53,22 @@ const CATEGORY_COLORS = {
   'Otros':                  '#94a3b8',
 }
 
+const CATEGORY_PASTELS = {
+  'Verduras y Hortalizas':  '#d1fae5',
+  'Frutas':                 '#fce7f3',
+  'Carnes':                 '#fee2e2',
+  'Pescados y Mariscos':    '#dbeafe',
+  'Lácteos y Huevos':       '#fef3c7',
+  'Legumbres y Cereales':   '#ede9fe',
+  'Pasta y Arroz':          '#fef9c3',
+  'Conservas y Preparados': '#cffafe',
+  'Condimentos y Especias': '#ffedd5',
+  'Aceites y Vinagres':     '#ecfccb',
+  'Guisos':                 '#fde8d1',
+  'Comer fuera':            '#e2e8f0',
+  'Otros':                  '#fef08a',
+}
+
 // Types available in context-menu color picker
 const FOOD_TYPES = [
   { key: 'Carnes',               label: 'Carnes',       emoji: '🥩' },
@@ -124,15 +140,29 @@ function slotRotation(slotId) {
   return (((hash % 1000) / 1000) * 5 - 2.5).toFixed(2)
 }
 
-function getDominantCategoryColor(ingredientIds, allIngredients) {
+function getDominantCategory(ingredientIds, allIngredients) {
   if (!ingredientIds?.length) return null
   const counts = {}
   for (const id of ingredientIds) {
     const ing = allIngredients.find((i) => i.id === id)
     if (ing) counts[ing.category] = (counts[ing.category] || 0) + 1
   }
-  const dominant = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0]
-  return dominant ? (CATEGORY_COLORS[dominant] ?? null) : null
+  return Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
+}
+
+function getDominantCategoryColor(ingredientIds, allIngredients) {
+  const cat = getDominantCategory(ingredientIds, allIngredients)
+  return cat ? (CATEGORY_COLORS[cat] ?? null) : null
+}
+
+function guessCategoryForItem(name, ingredients) {
+  const q = name.toLowerCase().trim()
+  const exact = ingredients.find((i) => i.name.toLowerCase() === q)
+  if (exact) return exact.category
+  const partial = ingredients.find(
+    (i) => i.name.toLowerCase().includes(q) || q.includes(i.name.toLowerCase())
+  )
+  return partial ? partial.category : 'Otros'
 }
 
 async function callGemini(dishName, effortLevel, ingredientNames) {
@@ -249,13 +279,16 @@ function DroppableCell({ id, children }) {
 
 function DraggablePostit({ slot, ingredients, colorOverrides, onEdit, onDelete, onContextMenu }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({ id: slot.id })
-  const overrideColor = colorOverrides?.[slot.id] ? CATEGORY_COLORS[colorOverrides[slot.id]] : null
-  const borderColor = overrideColor || getDominantCategoryColor(slot.ingredient_ids, ingredients)
+  const overrideCategory = colorOverrides?.[slot.id] || null
+  const category = overrideCategory || getDominantCategory(slot.ingredient_ids, ingredients)
+  const bgColor = category ? (CATEGORY_PASTELS[category] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
+  const accentColor = category ? (CATEGORY_COLORS[category] ?? CATEGORY_COLORS['Otros']) : CATEGORY_COLORS['Otros']
   const rotation = slotRotation(slot.id)
   const style = {
     ...(transform ? { transform: CSS.Translate.toString(transform) } : {}),
     '--base-rotate': `${rotation}deg`,
-    ...(borderColor ? { borderLeftColor: borderColor } : {}),
+    background: bgColor,
+    '--postit-accent': accentColor,
   }
 
   return (
@@ -315,7 +348,6 @@ function PostitContent({ slot, onEdit, onDelete, dragHandleRef, dragListeners, d
             {...dragAttributes}
             className="drag-handle"
             title="Arrastrar"
-            onPointerDown={(e) => e.stopPropagation()}
           >
             <GripVertical size={12} />
           </div>
@@ -692,6 +724,24 @@ function ShoppingHistoryModal({ history, onClose }) {
   )
 }
 
+// ─── TrayDish ─────────────────────────────────────────────────────────────────
+
+function TrayDish({ dish }) {
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({ id: `tray-${dish.id}` })
+  const style = {
+    ...(transform ? { transform: CSS.Translate.toString(transform) } : {}),
+    opacity: isDragging ? 0.4 : 1,
+  }
+  return (
+    <div ref={setNodeRef} style={style} className="tray-dish">
+      <span className="tray-dish-name">{dish.name}</span>
+      <div ref={setActivatorNodeRef} {...listeners} {...attributes} className="drag-handle" title="Arrastrar al tablero">
+        <GripVertical size={12} />
+      </div>
+    </div>
+  )
+}
+
 // ─── PostitContextMenu ────────────────────────────────────────────────────────
 
 function PostitContextMenu({ menu, onRecipe, onCopy, onChangeType, onClose }) {
@@ -816,6 +866,7 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem('customItems') || '[]') } catch { return [] }
   })
   const [customInput, setCustomInput] = useState('')
+  const [trayDishes, setTrayDishes] = useState([])
 
   const setClearedWeek = (val) => {
     setClearedWeekRaw(val)
@@ -860,6 +911,8 @@ export default function App() {
         ings = await dbGet('v2_ingredients')
       }
       setIngredients(ings)
+      const dishes = await dbGet('v2_dishes')
+      setTrayDishes(dishes)
       setLoading(false)
     } catch (e) {
       showToast('Error al cargar ingredientes: ' + e.message)
@@ -1011,7 +1064,8 @@ export default function App() {
   }
 
   function addCustomItem(name) {
-    setCustomItems((prev) => [...prev, { id: Date.now().toString(), name }])
+    const category = guessCategoryForItem(name, ingredients)
+    setCustomItems((prev) => [...prev, { id: Date.now().toString(), name, category }])
   }
   function removeCustomItem(id) {
     setCustomItems((prev) => prev.filter((i) => i.id !== id))
@@ -1033,6 +1087,31 @@ export default function App() {
     setActiveId(null)
     if (!over) return
     const [newDayIdx, newSlotKey] = over.id.split('-')
+    if (isNaN(parseInt(newDayIdx))) return
+
+    // Tray item dropped on board
+    if (String(active.id).startsWith('tray-')) {
+      const dishId = String(active.id).replace('tray-', '')
+      const dish = trayDishes.find((d) => String(d.id) === dishId)
+      if (!dish) return
+      try {
+        const dishIngs = await dbGet('v2_dish_ingredients', { dish_id: dish.id, effort_level: 1 })
+        const ingIds = dishIngs.map((di) => di.ingredient_id)
+        const boardSlot = await dbInsert('v2_board_slots', {
+          week_key: weekKey,
+          day_idx: parseInt(newDayIdx),
+          slot_key: newSlotKey,
+          position: Date.now(),
+          dish_id: dish.id,
+          effort_override: 1,
+        })
+        setSlots((prev) => [...prev, { ...boardSlot, dish_name: dish.name, ingredient_ids: ingIds }])
+      } catch (e) {
+        showToast('Error al añadir plato: ' + e.message)
+      }
+      return
+    }
+
     const slot = slots.find((s) => s.id === active.id)
     if (!slot) return
     if (String(slot.day_idx) === newDayIdx && slot.slot_key === newSlotKey) return
@@ -1235,13 +1314,30 @@ export default function App() {
             </div>
 
             <DragOverlay dropAnimation={null}>
-              {activeSlot && (
-                <div className="postit-overlay">
-                  <PostitContent slot={activeSlot} onEdit={() => {}} onDelete={() => {}} dragHandleRef={null} />
-                </div>
+              {activeId && (
+                String(activeId).startsWith('tray-')
+                  ? (() => {
+                      const d = trayDishes.find((x) => String(x.id) === String(activeId).replace('tray-', ''))
+                      return d ? <div className="tray-dish tray-dish-overlay">{d.name}</div> : null
+                    })()
+                  : (() => {
+                      const s = slots.find((x) => x.id === activeId)
+                      return s ? <div className="postit-overlay"><PostitContent slot={s} onEdit={() => {}} onDelete={() => {}} dragHandleRef={null} /></div> : null
+                    })()
               )}
             </DragOverlay>
           </DndContext>
+
+          {trayDishes.length > 0 && (
+            <div className="dishes-tray">
+              <div className="dishes-tray-label">Platos guardados — arrastra al tablero</div>
+              <div className="dishes-tray-list">
+                {trayDishes.map((dish) => (
+                  <TrayDish key={dish.id} dish={dish} />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <>
@@ -1285,29 +1381,40 @@ export default function App() {
                 </p>
               ) : (
                 <>
-                  {shoppingList.map(({ category, items }) => (
-                    <div key={category} className="shopping-category">
-                      <div className="shopping-category-title">{category}</div>
-                      {items.map(({ ingredient, dishes }) => (
-                        <div
-                          key={ingredient.id}
-                          className={`shopping-item${purchasedIds.has(ingredient.id) ? ' purchased' : ''}`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={purchasedIds.has(ingredient.id)}
-                            onChange={() => togglePurchased(ingredient.id)}
-                          />
-                          <span
-                            className="shopping-item-name"
-                            onMouseEnter={(e) => setPopover({ ingredient, position: { x: e.clientX, y: e.clientY } })}
-                            onMouseLeave={() => setPopover(null)}
-                          >{ingredient.name}</span>
-                          <span className="shopping-item-dishes">{dishes.length}</span>
+                  {(() => {
+                    // Merge custom items into their categories
+                    const allCategories = [...new Set([
+                      ...shoppingList.map((c) => c.category),
+                      ...customItems.map((i) => i.category || 'Otros'),
+                    ])]
+                    return allCategories.map((category) => {
+                      const regular = shoppingList.find((c) => c.category === category)?.items || []
+                      const custom = customItems.filter((i) => (i.category || 'Otros') === category)
+                      if (!regular.length && !custom.length) return null
+                      return (
+                        <div key={category} className="shopping-category">
+                          <div className="shopping-category-title">{category}</div>
+                          {regular.map(({ ingredient, dishes }) => (
+                            <div key={ingredient.id} className={`shopping-item${purchasedIds.has(ingredient.id) ? ' purchased' : ''}`}>
+                              <input type="checkbox" checked={purchasedIds.has(ingredient.id)} onChange={() => togglePurchased(ingredient.id)} />
+                              <span className="shopping-item-name"
+                                onMouseEnter={(e) => setPopover({ ingredient, position: { x: e.clientX, y: e.clientY } })}
+                                onMouseLeave={() => setPopover(null)}
+                              >{ingredient.name}</span>
+                              <span className="shopping-item-dishes">{dishes.length}</span>
+                            </div>
+                          ))}
+                          {custom.map((item) => (
+                            <div key={item.id} className={`shopping-item${purchasedIds.has('custom_' + item.id) ? ' purchased' : ''}`}>
+                              <input type="checkbox" checked={purchasedIds.has('custom_' + item.id)} onChange={() => toggleCustomItem(item.id)} />
+                              <span className="shopping-item-name">{item.name}</span>
+                              <button className="postit-btn delete" style={{ opacity: 0.5, flexShrink: 0 }} onPointerDown={(e) => e.stopPropagation()} onClick={() => removeCustomItem(item.id)}><X size={10} /></button>
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  ))}
+                      )
+                    })
+                  })()}
                   {purchasedIds.size > 0 && (
                     <button
                       className="btn-clear-purchased"
@@ -1318,28 +1425,6 @@ export default function App() {
                     </button>
                   )}
                 </>
-              )}
-              {/* Custom items (always visible) */}
-              {customItems.length > 0 && (
-                <div className="shopping-category" style={{ marginTop: 12 }}>
-                  <div className="shopping-category-title">Otros artículos</div>
-                  {customItems.map((item) => (
-                    <div key={item.id} className={`shopping-item${purchasedIds.has('custom_' + item.id) ? ' purchased' : ''}`}>
-                      <input
-                        type="checkbox"
-                        checked={purchasedIds.has('custom_' + item.id)}
-                        onChange={() => toggleCustomItem(item.id)}
-                      />
-                      <span className="shopping-item-name">{item.name}</span>
-                      <button
-                        className="postit-btn delete"
-                        style={{ opacity: 0.5, flexShrink: 0 }}
-                        onPointerDown={(e) => e.stopPropagation()}
-                        onClick={() => removeCustomItem(item.id)}
-                      ><X size={10} /></button>
-                    </div>
-                  ))}
-                </div>
               )}
               <div className="custom-item-add">
                 <input
