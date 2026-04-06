@@ -1,7 +1,6 @@
 @font-face {
   font-family: 'Milk Choco';
-  src: url('/fonts/MilkChoco.otf') format('opentype'),
-       url('/fonts/MilkChoco.ttf') format('truetype');
+  src: url('/fonts/MilkChoco.otf') format('opentype');
   font-weight: normal;
   font-style: normal;
   font-display: swap;
@@ -341,7 +340,32 @@ html, body {
 .postit-footer {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   margin-top: 6px;
+}
+
+.drag-handle {
+  cursor: grab;
+  color: #a8a29e;
+  opacity: 0;
+  transition: opacity 0.15s;
+  display: flex;
+  align-items: center;
+  padding: 1px 2px;
+  border-radius: 3px;
+}
+
+.postit:hover .drag-handle {
+  opacity: 1;
+}
+
+.drag-handle:hover {
+  color: #57534e;
+  background: rgba(0,0,0,0.06);
+}
+
+.drag-handle:active {
+  cursor: grabbing;
 }
 
 .effort-dots {
