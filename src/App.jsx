@@ -83,6 +83,15 @@ const FOOD_TYPES = [
 // Categories that should NOT trigger consecutive-day warnings
 const ALERT_EXCLUDED = new Set(['Verduras y Hortalizas', 'Condimentos y Especias', 'Aceites y Vinagres', 'Frutas', 'Otros', null])
 
+const DISH_KEYWORDS = {
+  'Carnes':                ['pollo', 'pechuga', 'muslo', 'ternera', 'cerdo', 'cordero', 'pavo', 'conejo', 'costilla', 'albóndiga', 'hamburguesa', 'filete', 'chuleta', 'lomo', 'salchicha', 'chorizo', 'carne'],
+  'Pescados y Mariscos':   ['merluza', 'salmón', 'atún', 'bacalao', 'gambas', 'langostino', 'mejillón', 'pulpo', 'calamar', 'sepia', 'dorada', 'lubina', 'sardina', 'boquerón', 'rape', 'pescado', 'marisco'],
+  'Verduras y Hortalizas': ['ensalada', 'espinaca', 'brócoli', 'zanahoria', 'calabacín', 'pimiento', 'berenjena', 'tomate', 'lechuga', 'menestra', 'verdura', 'acelga'],
+  'Pasta y Arroz':         ['pasta', 'macarrón', 'espagueti', 'arroz', 'paella', 'fideos', 'lasaña', 'risotto', 'canelón', 'tallarín'],
+  'Legumbres y Cereales':  ['lentejas', 'garbanzos', 'alubias', 'judías', 'fabes', 'potaje', 'fabada'],
+  'Guisos':                ['guiso', 'estofado', 'cocido', 'puchero', 'caldo', 'sopa', 'crema', 'puré', 'caldereta', 'rabo'],
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function getWeekKey(offset = 0) {
@@ -140,19 +149,30 @@ function slotRotation(slotId) {
   return (((hash % 1000) / 1000) * 5 - 2.5).toFixed(2)
 }
 
-function getDominantCategory(ingredientIds, allIngredients) {
-  if (!ingredientIds?.length) return null
-  const counts = {}
-  for (const id of ingredientIds) {
-    const ing = allIngredients.find((i) => i.id === id)
-    if (ing) counts[ing.category] = (counts[ing.category] || 0) + 1
+function getDominantCategory(ingredientIds, allIngredients, dishName) {
+  if (ingredientIds?.length) {
+    const counts = {}
+    for (const id of ingredientIds) {
+      const ing = allIngredients.find((i) => i.id === id)
+      if (ing) counts[ing.category] = (counts[ing.category] || 0) + 1
+    }
+    const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0]
+    if (top) return top
   }
-  return Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
+  return dishName ? guessCategoryFromName(dishName) : null
 }
 
 function getDominantCategoryColor(ingredientIds, allIngredients) {
   const cat = getDominantCategory(ingredientIds, allIngredients)
   return cat ? (CATEGORY_COLORS[cat] ?? null) : null
+}
+
+function guessCategoryFromName(name) {
+  const lower = name.toLowerCase()
+  for (const [cat, kws] of Object.entries(DISH_KEYWORDS)) {
+    if (kws.some((kw) => lower.includes(kw))) return cat
+  }
+  return null
 }
 
 function guessCategoryForItem(name, ingredients) {
@@ -162,7 +182,8 @@ function guessCategoryForItem(name, ingredients) {
   const partial = ingredients.find(
     (i) => i.name.toLowerCase().includes(q) || q.includes(i.name.toLowerCase())
   )
-  return partial ? partial.category : 'Otros'
+  if (partial) return partial.category
+  return guessCategoryFromName(name) || 'Otros'
 }
 
 async function callGemini(dishName, effortLevel, ingredientNames) {
@@ -280,7 +301,7 @@ function DroppableCell({ id, children }) {
 function DraggablePostit({ slot, ingredients, colorOverrides, onEdit, onDelete, onContextMenu }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({ id: slot.id })
   const overrideCategory = colorOverrides?.[slot.id] || null
-  const category = overrideCategory || getDominantCategory(slot.ingredient_ids, ingredients)
+  const category = overrideCategory || getDominantCategory(slot.ingredient_ids, ingredients, slot.dish_name)
   const bgColor = category ? (CATEGORY_PASTELS[category] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
   const accentColor = category ? (CATEGORY_COLORS[category] ?? CATEGORY_COLORS['Otros']) : CATEGORY_COLORS['Otros']
   const rotation = slotRotation(slot.id)
@@ -724,19 +745,61 @@ function ShoppingHistoryModal({ history, onClose }) {
   )
 }
 
-// ─── TrayDish ─────────────────────────────────────────────────────────────────
+// ─── PoolPostit ───────────────────────────────────────────────────────────────
 
-function TrayDish({ dish }) {
-  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({ id: `tray-${dish.id}` })
+function PoolPostit({ item, ingredients, onUpdate, onDelete }) {
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({ id: `pool-${item.id}` })
+  const [editing, setEditing] = useState(!item.dish_name)
+  const [draft, setDraft] = useState(item.dish_name)
+  const inputRef = useRef(null)
+
+  useEffect(() => { if (editing) inputRef.current?.focus() }, [editing])
+
+  const category = getDominantCategory([], ingredients, item.dish_name)
+  const bgColor = category ? (CATEGORY_PASTELS[category] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
+  const rotation = slotRotation(item.id)
+
   const style = {
     ...(transform ? { transform: CSS.Translate.toString(transform) } : {}),
+    '--base-rotate': `${rotation}deg`,
+    background: bgColor,
     opacity: isDragging ? 0.4 : 1,
   }
+
+  function commitEdit() {
+    setEditing(false)
+    onUpdate({ ...item, dish_name: draft.trim() || item.dish_name })
+  }
+
   return (
-    <div ref={setNodeRef} style={style} className="tray-dish">
-      <span className="tray-dish-name">{dish.name}</span>
-      <div ref={setActivatorNodeRef} {...listeners} {...attributes} className="drag-handle" title="Arrastrar al tablero">
-        <GripVertical size={12} />
+    <div ref={setNodeRef} style={style} className="postit pool-postit">
+      <div className="postit-header">
+        {editing ? (
+          <input
+            ref={inputRef}
+            className="pool-name-input"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commitEdit}
+            onKeyDown={(e) => { if (e.key === 'Enter') commitEdit() }}
+            onPointerDown={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <span className="postit-name" onDoubleClick={() => setEditing(true)} title="Doble clic para editar">
+            {item.dish_name || <em style={{ opacity: 0.5 }}>sin nombre</em>}
+          </span>
+        )}
+        <div className="postit-actions">
+          <button className="postit-btn delete" onPointerDown={(e) => e.stopPropagation()} onClick={onDelete}>
+            <Trash2 size={11} />
+          </button>
+        </div>
+      </div>
+      <div className="postit-footer">
+        <div />
+        <div ref={setActivatorNodeRef} {...listeners} {...attributes} className="drag-handle" title="Arrastrar al tablero">
+          <GripVertical size={12} />
+        </div>
       </div>
     </div>
   )
@@ -744,7 +807,7 @@ function TrayDish({ dish }) {
 
 // ─── PostitContextMenu ────────────────────────────────────────────────────────
 
-function PostitContextMenu({ menu, onRecipe, onCopy, onChangeType, onClose }) {
+function PostitContextMenu({ menu, onRecipe, onCopy, onMove, onChangeType, onClose }) {
   const [showTypes, setShowTypes] = useState(false)
   const ref = useRef(null)
 
@@ -764,8 +827,11 @@ function PostitContextMenu({ menu, onRecipe, onCopy, onChangeType, onClose }) {
       <button className="context-menu-item" onMouseDown={() => { onRecipe(menu.slot); onClose() }}>
         <ChefHat size={13} /> Buscar receta IA
       </button>
+      <button className="context-menu-item" onMouseDown={() => { onMove(menu.slot); onClose() }}>
+        <ChevronRight size={13} /> Mover
+      </button>
       <button className="context-menu-item" onMouseDown={() => { onCopy(menu.slot); onClose() }}>
-        <Copy size={13} /> Copiar plato
+        <Copy size={13} /> Copiar
       </button>
       <div style={{ position: 'relative' }}>
         <button
@@ -859,6 +925,7 @@ export default function App() {
   const [contextMenu, setContextMenu] = useState(null)
   const [recipeModal, setRecipeModal] = useState(null)
   const [copyingSlot, setCopyingSlot] = useState(null)
+  const [movingSlot, setMovingSlot] = useState(null)
   const [colorOverrides, setColorOverridesRaw] = useState(() => {
     try { return JSON.parse(localStorage.getItem('colorOverrides') || '{}') } catch { return {} }
   })
@@ -866,7 +933,14 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem('customItems') || '[]') } catch { return [] }
   })
   const [customInput, setCustomInput] = useState('')
-  const [trayDishes, setTrayDishes] = useState([])
+  const [poolItems, setPoolItemsRaw] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('dishPool') || '[]') } catch { return [] }
+  })
+  const setPoolItems = (val) => {
+    const next = typeof val === 'function' ? val(poolItems) : val
+    setPoolItemsRaw(next)
+    localStorage.setItem('dishPool', JSON.stringify(next))
+  }
 
   const setClearedWeek = (val) => {
     setClearedWeekRaw(val)
@@ -911,8 +985,6 @@ export default function App() {
         ings = await dbGet('v2_ingredients')
       }
       setIngredients(ings)
-      const dishes = await dbGet('v2_dishes')
-      setTrayDishes(dishes)
       setLoading(false)
     } catch (e) {
       showToast('Error al cargar ingredientes: ' + e.message)
@@ -1059,6 +1131,24 @@ export default function App() {
     }
   }
 
+  async function handleMoveSlot(dayIdx, slotKey) {
+    if (!movingSlot) return
+    try {
+      await dbUpdate('v2_board_slots', movingSlot.id, {
+        day_idx: dayIdx,
+        slot_key: slotKey,
+        position: Date.now(),
+      })
+      setSlots((prev) => prev.map((s) =>
+        s.id === movingSlot.id ? { ...s, day_idx: dayIdx, slot_key: slotKey } : s
+      ))
+      setMovingSlot(null)
+      showToast('Plato movido ✓')
+    } catch (e) {
+      showToast('Error al mover: ' + e.message)
+    }
+  }
+
   function handleChangeType(slotId, typeKey) {
     setColorOverrides((prev) => ({ ...prev, [slotId]: typeKey }))
   }
@@ -1090,22 +1180,19 @@ export default function App() {
     if (isNaN(parseInt(newDayIdx))) return
 
     // Tray item dropped on board
-    if (String(active.id).startsWith('tray-')) {
-      const dishId = String(active.id).replace('tray-', '')
-      const dish = trayDishes.find((d) => String(d.id) === dishId)
-      if (!dish) return
+    if (String(active.id).startsWith('pool-')) {
+      const poolId = String(active.id).replace('pool-', '')
+      const poolItem = poolItems.find((p) => p.id === poolId)
+      if (!poolItem || !poolItem.dish_name) return
       try {
-        const dishIngs = await dbGet('v2_dish_ingredients', { dish_id: dish.id, effort_level: 1 })
-        const ingIds = dishIngs.map((di) => di.ingredient_id)
-        const boardSlot = await dbInsert('v2_board_slots', {
-          week_key: weekKey,
-          day_idx: parseInt(newDayIdx),
-          slot_key: newSlotKey,
-          position: Date.now(),
-          dish_id: dish.id,
-          effort_override: 1,
+        await handleSaveDish({
+          dishName: poolItem.dish_name,
+          effort: poolItem.effort || 1,
+          selectedIds: [],
+          slot: null,
+          dayIdx: parseInt(newDayIdx),
+          slotKey: newSlotKey,
         })
-        setSlots((prev) => [...prev, { ...boardSlot, dish_name: dish.name, ingredient_ids: ingIds }])
       } catch (e) {
         showToast('Error al añadir plato: ' + e.message)
       }
@@ -1242,11 +1329,14 @@ export default function App() {
 
       <div className="app-body">
         <div className="board-wrapper">
-          {copyingSlot && (
+          {(copyingSlot || movingSlot) && (
             <div className="copy-banner">
-              <Copy size={14} />
-              Haz clic en "Añadir" para pegar <strong>{copyingSlot.dish_name}</strong>
-              <button onClick={() => setCopyingSlot(null)}><X size={13} /></button>
+              {movingSlot ? <ChevronRight size={14} /> : <Copy size={14} />}
+              {movingSlot
+                ? <>Moviendo <strong>{movingSlot.dish_name}</strong> — elige destino</>
+                : <>Copiando <strong>{copyingSlot.dish_name}</strong> — elige dónde pegar</>
+              }
+              <button onClick={() => { setCopyingSlot(null); setMovingSlot(null) }}><X size={13} /></button>
             </div>
           )}
           {dietWarnings.length > 0 && (
@@ -1296,14 +1386,15 @@ export default function App() {
                         ))}
                         <div className="board-cell-add">
                           <button
-                            className={`btn-add-slot${copyingSlot ? ' copy-target' : ''}`}
-                            onClick={() => copyingSlot
-                              ? handleCopySlot(dayIdx, slot.key)
-                              : setAddModal({ dayIdx, slotKey: slot.key })
-                            }
+                            className={`btn-add-slot${copyingSlot || movingSlot ? ' copy-target' : ''}`}
+                            onClick={() => {
+                              if (copyingSlot) handleCopySlot(dayIdx, slot.key)
+                              else if (movingSlot) handleMoveSlot(dayIdx, slot.key)
+                              else setAddModal({ dayIdx, slotKey: slot.key })
+                            }}
                           >
                             <Plus size={12} />
-                            <span>{copyingSlot ? 'Pegar aquí' : 'Añadir'}</span>
+                            <span>{copyingSlot ? 'Pegar aquí' : movingSlot ? 'Mover aquí' : 'Añadir'}</span>
                           </button>
                         </div>
                       </DroppableCell>
@@ -1315,10 +1406,10 @@ export default function App() {
 
             <DragOverlay dropAnimation={null}>
               {activeId && (
-                String(activeId).startsWith('tray-')
+                String(activeId).startsWith('pool-')
                   ? (() => {
-                      const d = trayDishes.find((x) => String(x.id) === String(activeId).replace('tray-', ''))
-                      return d ? <div className="tray-dish tray-dish-overlay">{d.name}</div> : null
+                      const p = poolItems.find((x) => x.id === String(activeId).replace('pool-', ''))
+                      return p ? <div className="tray-dish-overlay">{p.dish_name || '…'}</div> : null
                     })()
                   : (() => {
                       const s = slots.find((x) => x.id === activeId)
@@ -1328,16 +1419,29 @@ export default function App() {
             </DragOverlay>
           </DndContext>
 
-          {trayDishes.length > 0 && (
-            <div className="dishes-tray">
-              <div className="dishes-tray-label">Platos guardados — arrastra al tablero</div>
-              <div className="dishes-tray-list">
-                {trayDishes.map((dish) => (
-                  <TrayDish key={dish.id} dish={dish} />
-                ))}
-              </div>
+          <div className="dishes-tray">
+            <div className="dishes-tray-header">
+              <span className="dishes-tray-label">Mi despensa — post-its sin día asignado</span>
+              <button
+                className="btn-add-slot"
+                style={{ width: 'auto', padding: '3px 10px', fontSize: 11 }}
+                onClick={() => setPoolItems((prev) => [...prev, { id: Date.now().toString(), dish_name: '', effort: 1 }])}
+              >
+                <Plus size={11} /> Nuevo
+              </button>
             </div>
-          )}
+            <div className="dishes-tray-list">
+              {poolItems.map((item) => (
+                <PoolPostit
+                  key={item.id}
+                  item={item}
+                  ingredients={ingredients}
+                  onUpdate={(updated) => setPoolItems((prev) => prev.map((p) => p.id === item.id ? updated : p))}
+                  onDelete={() => setPoolItems((prev) => prev.filter((p) => p.id !== item.id))}
+                />
+              ))}
+            </div>
+          </div>
         </div>
 
         <>
@@ -1499,7 +1603,8 @@ export default function App() {
         <PostitContextMenu
           menu={contextMenu}
           onRecipe={(slot) => setRecipeModal(slot)}
-          onCopy={(slot) => { setCopyingSlot(slot); showToast(`Copiando "${slot.dish_name}" — elige dónde pegar`) }}
+          onCopy={(slot) => { setCopyingSlot(slot); setMovingSlot(null); showToast(`Copiando "${slot.dish_name}" — elige dónde pegar`) }}
+          onMove={(slot) => { setMovingSlot(slot); setCopyingSlot(null); showToast(`Moviendo "${slot.dish_name}" — elige destino`) }}
           onChangeType={handleChangeType}
           onClose={() => setContextMenu(null)}
         />

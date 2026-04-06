@@ -1314,11 +1314,19 @@ html, body {
   cursor: not-allowed;
 }
 
-/* ─── Dishes tray ─── */
+/* ─── Dishes tray / pool ─── */
 .dishes-tray {
   border-top: 2px dashed var(--border);
-  padding: 10px 16px 12px;
+  padding: 10px 16px 14px;
   background: var(--surface2);
+  flex-shrink: 0;
+}
+
+.dishes-tray-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
 }
 
 .dishes-tray-label {
@@ -1327,49 +1335,39 @@ html, body {
   text-transform: uppercase;
   letter-spacing: 0.07em;
   color: var(--text-muted);
-  margin-bottom: 8px;
 }
 
 .dishes-tray-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
 }
 
-.tray-dish {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  background: var(--surface);
-  border: 1.5px solid var(--border);
-  border-radius: var(--radius-pill);
-  padding: 4px 8px 4px 10px;
-  font-size: 12px;
-  color: var(--text);
+.pool-postit {
+  width: 110px;
+  flex-shrink: 0;
   cursor: default;
-  transition: border-color 0.15s, background 0.15s;
-  user-select: none;
 }
 
-.tray-dish:hover {
-  border-color: var(--accent);
-  background: var(--accent-light);
-}
-
-.tray-dish .drag-handle {
-  opacity: 0.5;
-}
-
-.tray-dish:hover .drag-handle {
-  opacity: 1;
+.pool-name-input {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1.5px solid var(--accent);
+  font-family: 'Milk Choco', 'Caveat', cursive;
+  font-size: 14px;
+  color: #1c1917;
+  outline: none;
+  padding: 0 0 2px;
+  text-align: center;
 }
 
 .tray-dish-overlay {
-  background: var(--surface);
+  background: var(--postit);
   border: 1.5px solid var(--accent);
-  border-radius: var(--radius-pill);
-  padding: 4px 12px;
-  font-size: 12px;
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  font-size: 13px;
   box-shadow: 4px 6px 16px rgba(0,0,0,0.2);
   pointer-events: none;
 }
