@@ -747,7 +747,7 @@ function ShoppingHistoryModal({ history, onClose }) {
 
 // ─── PoolPostit ───────────────────────────────────────────────────────────────
 
-function PoolPostit({ item, ingredients, onUpdate, onDelete }) {
+function PoolPostit({ item, ingredients, onUpdate, onDelete, onContextMenu }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({ id: `pool-${item.id}` })
   const [editing, setEditing] = useState(!item.dish_name)
   const [draft, setDraft] = useState(item.dish_name)
@@ -771,8 +771,16 @@ function PoolPostit({ item, ingredients, onUpdate, onDelete }) {
     onUpdate({ ...item, dish_name: draft.trim() || item.dish_name })
   }
 
+  // Adapt pool item to the slot shape expected by context menu
+  const slotLike = { id: item.id, dish_name: item.dish_name, ingredient_ids: [] }
+
   return (
-    <div ref={setNodeRef} style={style} className="postit pool-postit">
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="postit pool-postit"
+      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onContextMenu(e, slotLike) }}
+    >
       <div className="postit-header">
         {editing ? (
           <input
@@ -827,12 +835,16 @@ function PostitContextMenu({ menu, onRecipe, onCopy, onMove, onChangeType, onClo
       <button className="context-menu-item" onMouseDown={() => { onRecipe(menu.slot); onClose() }}>
         <ChefHat size={13} /> Buscar receta IA
       </button>
-      <button className="context-menu-item" onMouseDown={() => { onMove(menu.slot); onClose() }}>
-        <ChevronRight size={13} /> Mover
-      </button>
-      <button className="context-menu-item" onMouseDown={() => { onCopy(menu.slot); onClose() }}>
-        <Copy size={13} /> Copiar
-      </button>
+      {!menu.isPool && (
+        <button className="context-menu-item" onMouseDown={() => { onMove(menu.slot); onClose() }}>
+          <ChevronRight size={13} /> Mover
+        </button>
+      )}
+      {!menu.isPool && (
+        <button className="context-menu-item" onMouseDown={() => { onCopy(menu.slot); onClose() }}>
+          <Copy size={13} /> Copiar
+        </button>
+      )}
       <div style={{ position: 'relative' }}>
         <button
           className="context-menu-item"
@@ -1438,6 +1450,7 @@ export default function App() {
                   ingredients={ingredients}
                   onUpdate={(updated) => setPoolItems((prev) => prev.map((p) => p.id === item.id ? updated : p))}
                   onDelete={() => setPoolItems((prev) => prev.filter((p) => p.id !== item.id))}
+                  onContextMenu={(e, slot) => setContextMenu({ x: e.clientX, y: e.clientY, slot, isPool: true })}
                 />
               ))}
             </div>
