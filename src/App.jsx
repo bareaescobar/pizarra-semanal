@@ -818,7 +818,7 @@ function PoolPostit({ item, ingredients, onUpdate, onDelete, onContextMenu }) {
 
 // ─── PostitContextMenu ────────────────────────────────────────────────────────
 
-function PostitContextMenu({ menu, onRecipe, onCopy, onMove, onChangeType, onClose }) {
+function PostitContextMenu({ menu, onRecipe, onCopy, onMove, onSendToPool, onChangeType, onClose }) {
   const [showTypes, setShowTypes] = useState(false)
   const ref = useRef(null)
 
@@ -844,6 +844,11 @@ function PostitContextMenu({ menu, onRecipe, onCopy, onMove, onChangeType, onClo
       {!menu.isPool && (
         <button className="context-menu-item" onMouseDown={() => { onCopy(menu.slot); onClose() }}>
           <Copy size={13} /> Copiar
+        </button>
+      )}
+      {!menu.isPool && (
+        <button className="context-menu-item" onMouseDown={() => { onSendToPool(menu.slot); onClose() }}>
+          <ChevronLeft size={13} /> Mover a la despensa
         </button>
       )}
       <div style={{ position: 'relative' }}>
@@ -1624,6 +1629,11 @@ export default function App() {
           onRecipe={(slot) => setRecipeModal(slot)}
           onCopy={(slot) => { setCopyingSlot(slot); setMovingSlot(null); showToast(`Copiando "${slot.dish_name}" — elige dónde pegar`) }}
           onMove={(slot) => { setMovingSlot(slot); setCopyingSlot(null); showToast(`Moviendo "${slot.dish_name}" — elige destino`) }}
+          onSendToPool={(slot) => {
+            setPoolItems((prev) => [...prev, { id: Date.now().toString(), dish_name: slot.dish_name, effort: 1 }])
+            handleDelete(slot.id)
+            showToast(`"${slot.dish_name}" movido a la despensa`)
+          }}
           onChangeType={handleChangeType}
           onClose={() => setContextMenu(null)}
         />
