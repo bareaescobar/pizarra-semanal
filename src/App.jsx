@@ -23,6 +23,7 @@ import {
   Copy,
   ChefHat,
   Palette,
+  GripVertical,
 } from 'lucide-react'
 import supabase, { dbGet, dbInsert, dbUpdate, dbDelete } from './supabase.js'
 import { INGREDIENT_CATEGORIES, DEFAULT_INGREDIENTS } from './ingredients.js'
@@ -247,7 +248,7 @@ function DroppableCell({ id, children }) {
 }
 
 function DraggablePostit({ slot, ingredients, colorOverrides, onEdit, onDelete, onContextMenu }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: slot.id })
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({ id: slot.id })
   const overrideColor = colorOverrides?.[slot.id] ? CATEGORY_COLORS[colorOverrides[slot.id]] : null
   const borderColor = overrideColor || getDominantCategoryColor(slot.ingredient_ids, ingredients)
   const rotation = slotRotation(slot.id)
@@ -261,17 +262,22 @@ function DraggablePostit({ slot, ingredients, colorOverrides, onEdit, onDelete, 
     <div
       ref={setNodeRef}
       style={style}
-      {...listeners}
-      {...attributes}
       className={`postit${isDragging ? ' dragging' : ''}`}
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onContextMenu(e, slot) }}
     >
-      <PostitContent slot={slot} onEdit={onEdit} onDelete={onDelete} />
+      <PostitContent
+        slot={slot}
+        onEdit={onEdit}
+        onDelete={onDelete}
+        dragHandleRef={setActivatorNodeRef}
+        dragListeners={listeners}
+        dragAttributes={attributes}
+      />
     </div>
   )
 }
 
-function PostitContent({ slot, onEdit, onDelete }) {
+function PostitContent({ slot, onEdit, onDelete, dragHandleRef, dragListeners, dragAttributes }) {
   const effort = slot.effort_override || 1
   return (
     <>
@@ -302,6 +308,18 @@ function PostitContent({ slot, onEdit, onDelete }) {
             <div key={n} className={`effort-dot${n <= effort ? ` active-${effort}` : ''}`} />
           ))}
         </div>
+        {dragHandleRef && (
+          <div
+            ref={dragHandleRef}
+            {...dragListeners}
+            {...dragAttributes}
+            className="drag-handle"
+            title="Arrastrar"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <GripVertical size={12} />
+          </div>
+        )}
       </div>
     </>
   )
@@ -1219,7 +1237,7 @@ export default function App() {
             <DragOverlay dropAnimation={null}>
               {activeSlot && (
                 <div className="postit-overlay">
-                  <PostitContent slot={activeSlot} onEdit={() => {}} onDelete={() => {}} />
+                  <PostitContent slot={activeSlot} onEdit={() => {}} onDelete={() => {}} dragHandleRef={null} />
                 </div>
               )}
             </DragOverlay>
