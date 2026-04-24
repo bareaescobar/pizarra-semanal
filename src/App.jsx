@@ -94,41 +94,33 @@ const DISH_KEYWORDS = {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function getWeekKey(offset = 0) {
-  const now = new Date()
-  const day = now.getDay()
-  const diffToMonday = day === 0 ? -6 : 1 - day
-  const monday = new Date(now)
-  monday.setDate(now.getDate() + diffToMonday + offset * 7)
-  const weekOfMonth = Math.ceil(monday.getDate() / 7)
-  const M = monday.getMonth() + 1
-  const D = monday.getDate()
-  const Y = monday.getFullYear()
-  return `${Y}-W${weekOfMonth}-${M}-${D}`
-}
-
-function getMondayFromKey(weekKey) {
-  const parts = weekKey.split('-')
-  const year = parseInt(parts[0])
-  const month = parseInt(parts[2]) - 1
-  const day = parseInt(parts[3])
-  return new Date(year, month, day)
-}
-
-function formatWeekRange(weekKey) {
-  const monday = getMondayFromKey(weekKey)
-  const sunday = new Date(monday)
-  sunday.setDate(monday.getDate() + 6)
-  const fmt = (d) =>
-    d.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })
-  return `${fmt(monday)} – ${fmt(sunday)}`
+// startDayOfWeek: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
+function getWeekKey(offset = 0, startDayOfWeek = 0) {
+  const today = new Date()
+  const todayDow = (today.getDay() + 6) % 7 // Mon=0..Sun=6
+  const daysSinceStart = (todayDow - startDayOfWeek + 7) % 7
+  const d = new Date(today)
+  d.setDate(today.getDate() - daysSinceStart + offset * 7)
+  const Y = d.getFullYear()
+  const M = String(d.getMonth() + 1).padStart(2, '0')
+  const D = String(d.getDate()).padStart(2, '0')
+  return `${Y}-${M}-${D}`
 }
 
 function getDayDate(weekKey, dayIdx) {
-  const monday = getMondayFromKey(weekKey)
-  const d = new Date(monday)
-  d.setDate(monday.getDate() + dayIdx)
-  return d
+  const [y, m, d] = weekKey.split('-').map(Number)
+  return new Date(y, m - 1, d + dayIdx)
+}
+
+function formatWeekRange(weekKey) {
+  const start = getDayDate(weekKey, 0)
+  const end = getDayDate(weekKey, 6)
+  const fmt = (d) => d.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })
+  return `${fmt(start)} – ${fmt(end)}`
+}
+
+function dayNameForIdx(dayIdx, startDayOfWeek) {
+  return DAYS[(startDayOfWeek + dayIdx) % 7]
 }
 
 function isToday(date) {
@@ -250,7 +242,7 @@ async function callGeminiRecipe(dishName) {
   return text.trim()
 }
 
-function getDietWarnings(slots, ingredients, colorOverrides) {
+function getDietWarnings(slots, ingredients, colorOverrides, startDayOfWeek = 0) {
   const dayCats = DAYS.map((_, dayIdx) => {
     const daySlots = slots.filter((s) => s.day_idx === dayIdx)
     if (!daySlots.length) return null
@@ -279,7 +271,7 @@ function getDietWarnings(slots, ingredients, colorOverrides) {
     if (!same) {
       const len = i - runStart
       if (len >= 2 && dayCats[runStart] && !ALERT_EXCLUDED.has(dayCats[runStart])) {
-        warnings.push({ category: dayCats[runStart], days: DAYS.slice(runStart, i) })
+        warnings.push({ category: dayCats[runStart], days: Array.from({ length: i - runStart }, (_, k) => dayNameForIdx(runStart + k, startDayOfWeek)) })
       }
       runStart = i
     }
@@ -380,7 +372,7 @@ function PostitContent({ slot, onEdit, onDelete, dragHandleRef, dragListeners, d
 
 // ─── DishModal ────────────────────────────────────────────────────────────────
 
-function DishModal({ mode, slot, dayIdx, slotKey, ingredients, slots, onClose, onSave, onIngredientAdded }) {
+function DishModal({ mode, slot, dayIdx, slotKey, startDayOfWeek, ingredients, slots, onClose, onSave, onIngredientAdded }) {
   const [dishName, setDishName] = useState(mode === 'edit' ? slot.dish_name : '')
   const [effort, setEffort] = useState(mode === 'edit' ? (slot.effort_override || 1) : 1)
   const [selectedIds, setSelectedIds] = useState(mode === 'edit' ? (slot.ingredient_ids || []) : [])
@@ -492,7 +484,7 @@ function DishModal({ mode, slot, dayIdx, slotKey, ingredients, slots, onClose, o
   }
 
   const title = mode === 'edit' ? 'Editar plato' : 'Añadir plato'
-  const dayLabel = mode === 'add' ? ` — ${DAYS[dayIdx]}, ${SLOTS.find((s) => s.key === slotKey)?.label}` : ''
+  const dayLabel = mode === 'add' ? ` — ${dayNameForIdx(dayIdx, startDayOfWeek ?? 0)}, ${SLOTS.find((s) => s.key === slotKey)?.label}` : ''
 
   return (
     <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
@@ -923,7 +915,9 @@ function RecipeModal({ slot, onClose }) {
 
 export default function App() {
   const [weekOffset, setWeekOffset] = useState(0)
-  const weekKey = getWeekKey(weekOffset)
+  const [startDayOfWeek, setStartDayOfWeekRaw] = useState(() => parseInt(localStorage.getItem('startDayOfWeek') || '0'))
+  const setStartDayOfWeek = (val) => { setStartDayOfWeekRaw(val); localStorage.setItem('startDayOfWeek', val) }
+  const weekKey = getWeekKey(weekOffset, startDayOfWeek)
 
   const [slots, setSlots] = useState([])
   const [ingredients, setIngredients] = useState([])
@@ -938,8 +932,7 @@ export default function App() {
   const [shoppingHistory, setShoppingHistory] = useState([])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [savingList, setSavingList] = useState(false)
-  const [clearedWeek, setClearedWeekRaw] = useState(() => localStorage.getItem('clearedWeek') || null)
-  const listCleared = clearedWeek === weekKey
+  const [allSlots, setAllSlots] = useState([])
   const [contextMenu, setContextMenu] = useState(null)
   const [recipeModal, setRecipeModal] = useState(null)
   const [copyingSlot, setCopyingSlot] = useState(null)
@@ -960,11 +953,6 @@ export default function App() {
     localStorage.setItem('dishPool', JSON.stringify(next))
   }
 
-  const setClearedWeek = (val) => {
-    setClearedWeekRaw(val)
-    if (val) localStorage.setItem('clearedWeek', val)
-    else localStorage.removeItem('clearedWeek')
-  }
   const setColorOverrides = (val) => {
     const next = typeof val === 'function' ? val(colorOverrides) : val
     setColorOverridesRaw(next)
@@ -1033,8 +1021,29 @@ export default function App() {
         })
       )
       setSlots(enriched)
+      loadAllSlots()
     } catch (e) {
       showToast('Error al cargar semana: ' + e.message)
+    }
+  }
+
+  async function loadAllSlots() {
+    try {
+      const { data: boardSlots, error } = await supabase.from('v2_board_slots').select('*')
+      if (error) throw error
+      if (!boardSlots.length) { setAllSlots([]); return }
+      const dishIds = [...new Set(boardSlots.map((s) => s.dish_id))]
+      const { data: dishes } = await supabase.from('v2_dishes').select('*').in('id', dishIds)
+      const dishMap = Object.fromEntries((dishes || []).map((d) => [d.id, d]))
+      const { data: dishIngs } = await supabase.from('v2_dish_ingredients').select('*').in('dish_id', dishIds)
+      const enriched = boardSlots.map((s) => {
+        const dish = dishMap[s.dish_id]
+        const ings = (dishIngs || []).filter((di) => di.dish_id === s.dish_id && di.effort_level === (s.effort_override || 1))
+        return { ...s, dish_name: dish?.name || '?', ingredient_ids: ings.map((di) => di.ingredient_id) }
+      })
+      setAllSlots(enriched)
+    } catch (e) {
+      console.error('Error al cargar todos los slots:', e)
     }
   }
 
@@ -1084,6 +1093,7 @@ export default function App() {
       ...prev,
       { ...boardSlot, dish_name: dishName, ingredient_ids: selectedIds },
     ])
+    loadAllSlots()
   }
 
   async function handleEditDish({ dishName, effort, selectedIds, slot }) {
@@ -1120,12 +1130,14 @@ export default function App() {
           : s
       )
     )
+    loadAllSlots()
   }
 
   async function handleDelete(slotId) {
     try {
       await dbDelete('v2_board_slots', slotId)
       setSlots((prev) => prev.filter((s) => s.id !== slotId))
+      setAllSlots((prev) => prev.filter((s) => s.id !== slotId))
     } catch (e) {
       showToast('Error al eliminar: ' + e.message)
     }
@@ -1243,7 +1255,7 @@ export default function App() {
 
   const shoppingList = (() => {
     const ingredientMap = {}
-    for (const slot of slots) {
+    for (const slot of allSlots) {
       for (const ingId of slot.ingredient_ids || []) {
         if (!ingredientMap[ingId]) ingredientMap[ingId] = []
         if (!ingredientMap[ingId].includes(slot.dish_name)) {
@@ -1289,7 +1301,6 @@ export default function App() {
         items: itemsToSave,
       })
       setPurchasedIds(new Set())
-      setClearedWeek(weekKey)
       showToast('Lista guardada en historial ✓')
       if (historyOpen) loadShoppingHistory()
     } catch (e) {
@@ -1319,7 +1330,7 @@ export default function App() {
   }
 
   const activeSlot = activeId ? slots.find((s) => s.id === activeId) : null
-  const dietWarnings = useMemo(() => getDietWarnings(slots, ingredients, colorOverrides), [slots, ingredients, colorOverrides])
+  const dietWarnings = useMemo(() => getDietWarnings(slots, ingredients, colorOverrides, startDayOfWeek), [slots, ingredients, colorOverrides, startDayOfWeek])
 
   if (loading) {
     return (
@@ -1335,11 +1346,11 @@ export default function App() {
       <header className="app-header">
         <h1>🗒️ Pizarra Semanal</h1>
         <div className="week-nav">
-          <button onClick={() => setWeekOffset((w) => w - 1)} title="Semana anterior">
+          <button onClick={() => setWeekOffset((w) => w - 1)} title="7 días atrás">
             <ChevronLeft size={16} />
           </button>
           <span>{formatWeekRange(weekKey)}</span>
-          <button onClick={() => setWeekOffset((w) => w + 1)} title="Semana siguiente">
+          <button onClick={() => setWeekOffset((w) => w + 1)} title="7 días adelante">
             <ChevronRight size={16} />
           </button>
           {weekOffset !== 0 && (
@@ -1347,6 +1358,19 @@ export default function App() {
               Hoy
             </button>
           )}
+        </div>
+        <div className="start-day-picker">
+          <span className="start-day-label">Empieza el</span>
+          {['L', 'M', 'X', 'J', 'V', 'S', 'D'].map((abbr, i) => (
+            <button
+              key={i}
+              className={`start-day-btn${startDayOfWeek === i ? ' active' : ''}`}
+              onClick={() => { setStartDayOfWeek(i); setWeekOffset(0) }}
+              title={DAYS[i]}
+            >
+              {abbr}
+            </button>
+          ))}
         </div>
       </header>
 
@@ -1374,11 +1398,12 @@ export default function App() {
           <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
             <div className="board">
               <div className="board-header-empty" />
-              {DAYS.map((day, i) => {
+              {DAYS.map((_, i) => {
                 const date = getDayDate(weekKey, i)
+                const name = dayNameForIdx(i, startDayOfWeek)
                 return (
-                  <div key={day} className={`board-day-header${isToday(date) ? ' today' : ''}`}>
-                    <div className="day-name">{day}</div>
+                  <div key={i} className={`board-day-header${isToday(date) ? ' today' : ''}`}>
+                    <div className="day-name">{name}</div>
                     <div className="day-date">
                       {date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
                     </div>
@@ -1489,21 +1514,7 @@ export default function App() {
               </div>
             </div>
             <div className="sidebar-body">
-              {listCleared ? (
-                <div className="sidebar-empty">
-                  <div style={{ fontSize: 32 }}>✓</div>
-                  <div style={{ marginTop: 8, fontWeight: 600, color: 'var(--text)' }}>Lista guardada</div>
-                  <div style={{ marginTop: 4, fontSize: 12 }}>
-                    Consulta el historial con el icono del reloj
-                  </div>
-                  <button
-                    style={{ marginTop: 16, fontSize: 12, background: 'none', border: '1.5px solid var(--border)', borderRadius: 'var(--radius-pill)', padding: '4px 14px', cursor: 'pointer', color: 'var(--text-muted)', fontFamily: 'inherit' }}
-                    onClick={() => setClearedWeek(null)}
-                  >
-                    Volver a la lista
-                  </button>
-                </div>
-              ) : shoppingList.length === 0 ? (
+              {shoppingList.length === 0 ? (
                 <p className="sidebar-empty">
                   Añade platos al tablero para ver los ingredientes aquí.
                 </p>
@@ -1589,6 +1600,7 @@ export default function App() {
           mode="add"
           dayIdx={addModal.dayIdx}
           slotKey={addModal.slotKey}
+          startDayOfWeek={startDayOfWeek}
           ingredients={ingredients}
           slots={slots}
           onClose={() => setAddModal(null)}
