@@ -938,8 +938,7 @@ export default function App() {
   const [shoppingHistory, setShoppingHistory] = useState([])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [savingList, setSavingList] = useState(false)
-  const [clearedWeek, setClearedWeekRaw] = useState(() => localStorage.getItem('clearedWeek') || null)
-  const listCleared = clearedWeek === weekKey
+  const [allSlots, setAllSlots] = useState([])
   const [contextMenu, setContextMenu] = useState(null)
   const [recipeModal, setRecipeModal] = useState(null)
   const [copyingSlot, setCopyingSlot] = useState(null)
@@ -960,11 +959,6 @@ export default function App() {
     localStorage.setItem('dishPool', JSON.stringify(next))
   }
 
-  const setClearedWeek = (val) => {
-    setClearedWeekRaw(val)
-    if (val) localStorage.setItem('clearedWeek', val)
-    else localStorage.removeItem('clearedWeek')
-  }
   const setColorOverrides = (val) => {
     const next = typeof val === 'function' ? val(colorOverrides) : val
     setColorOverridesRaw(next)
@@ -1033,8 +1027,29 @@ export default function App() {
         })
       )
       setSlots(enriched)
+      loadAllSlots()
     } catch (e) {
       showToast('Error al cargar semana: ' + e.message)
+    }
+  }
+
+  async function loadAllSlots() {
+    try {
+      const { data: boardSlots, error } = await supabase.from('v2_board_slots').select('*')
+      if (error) throw error
+      if (!boardSlots.length) { setAllSlots([]); return }
+      const dishIds = [...new Set(boardSlots.map((s) => s.dish_id))]
+      const { data: dishes } = await supabase.from('v2_dishes').select('*').in('id', dishIds)
+      const dishMap = Object.fromEntries((dishes || []).map((d) => [d.id, d]))
+      const { data: dishIngs } = await supabase.from('v2_dish_ingredients').select('*').in('dish_id', dishIds)
+      const enriched = boardSlots.map((s) => {
+        const dish = dishMap[s.dish_id]
+        const ings = (dishIngs || []).filter((di) => di.dish_id === s.dish_id && di.effort_level === (s.effort_override || 1))
+        return { ...s, dish_name: dish?.name || '?', ingredient_ids: ings.map((di) => di.ingredient_id) }
+      })
+      setAllSlots(enriched)
+    } catch (e) {
+      console.error('Error al cargar todos los slots:', e)
     }
   }
 
@@ -1084,6 +1099,7 @@ export default function App() {
       ...prev,
       { ...boardSlot, dish_name: dishName, ingredient_ids: selectedIds },
     ])
+    loadAllSlots()
   }
 
   async function handleEditDish({ dishName, effort, selectedIds, slot }) {
@@ -1120,12 +1136,14 @@ export default function App() {
           : s
       )
     )
+    loadAllSlots()
   }
 
   async function handleDelete(slotId) {
     try {
       await dbDelete('v2_board_slots', slotId)
       setSlots((prev) => prev.filter((s) => s.id !== slotId))
+      setAllSlots((prev) => prev.filter((s) => s.id !== slotId))
     } catch (e) {
       showToast('Error al eliminar: ' + e.message)
     }
@@ -1243,7 +1261,7 @@ export default function App() {
 
   const shoppingList = (() => {
     const ingredientMap = {}
-    for (const slot of slots) {
+    for (const slot of allSlots) {
       for (const ingId of slot.ingredient_ids || []) {
         if (!ingredientMap[ingId]) ingredientMap[ingId] = []
         if (!ingredientMap[ingId].includes(slot.dish_name)) {
@@ -1289,7 +1307,6 @@ export default function App() {
         items: itemsToSave,
       })
       setPurchasedIds(new Set())
-      setClearedWeek(weekKey)
       showToast('Lista guardada en historial ✓')
       if (historyOpen) loadShoppingHistory()
     } catch (e) {
@@ -1489,21 +1506,7 @@ export default function App() {
               </div>
             </div>
             <div className="sidebar-body">
-              {listCleared ? (
-                <div className="sidebar-empty">
-                  <div style={{ fontSize: 32 }}>✓</div>
-                  <div style={{ marginTop: 8, fontWeight: 600, color: 'var(--text)' }}>Lista guardada</div>
-                  <div style={{ marginTop: 4, fontSize: 12 }}>
-                    Consulta el historial con el icono del reloj
-                  </div>
-                  <button
-                    style={{ marginTop: 16, fontSize: 12, background: 'none', border: '1.5px solid var(--border)', borderRadius: 'var(--radius-pill)', padding: '4px 14px', cursor: 'pointer', color: 'var(--text-muted)', fontFamily: 'inherit' }}
-                    onClick={() => setClearedWeek(null)}
-                  >
-                    Volver a la lista
-                  </button>
-                </div>
-              ) : shoppingList.length === 0 ? (
+              {shoppingList.length === 0 ? (
                 <p className="sidebar-empty">
                   Añade platos al tablero para ver los ingredientes aquí.
                 </p>
