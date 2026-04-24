@@ -94,41 +94,33 @@ const DISH_KEYWORDS = {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function getWeekKey(offset = 0) {
-  const now = new Date()
-  const day = now.getDay()
-  const diffToMonday = day === 0 ? -6 : 1 - day
-  const monday = new Date(now)
-  monday.setDate(now.getDate() + diffToMonday + offset * 7)
-  const weekOfMonth = Math.ceil(monday.getDate() / 7)
-  const M = monday.getMonth() + 1
-  const D = monday.getDate()
-  const Y = monday.getFullYear()
-  return `${Y}-W${weekOfMonth}-${M}-${D}`
-}
-
-function getMondayFromKey(weekKey) {
-  const parts = weekKey.split('-')
-  const year = parseInt(parts[0])
-  const month = parseInt(parts[2]) - 1
-  const day = parseInt(parts[3])
-  return new Date(year, month, day)
-}
-
-function formatWeekRange(weekKey) {
-  const monday = getMondayFromKey(weekKey)
-  const sunday = new Date(monday)
-  sunday.setDate(monday.getDate() + 6)
-  const fmt = (d) =>
-    d.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })
-  return `${fmt(monday)} – ${fmt(sunday)}`
+// startDayOfWeek: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
+function getWeekKey(offset = 0, startDayOfWeek = 0) {
+  const today = new Date()
+  const todayDow = (today.getDay() + 6) % 7 // Mon=0..Sun=6
+  const daysSinceStart = (todayDow - startDayOfWeek + 7) % 7
+  const d = new Date(today)
+  d.setDate(today.getDate() - daysSinceStart + offset * 7)
+  const Y = d.getFullYear()
+  const M = String(d.getMonth() + 1).padStart(2, '0')
+  const D = String(d.getDate()).padStart(2, '0')
+  return `${Y}-${M}-${D}`
 }
 
 function getDayDate(weekKey, dayIdx) {
-  const monday = getMondayFromKey(weekKey)
-  const d = new Date(monday)
-  d.setDate(monday.getDate() + dayIdx)
-  return d
+  const [y, m, d] = weekKey.split('-').map(Number)
+  return new Date(y, m - 1, d + dayIdx)
+}
+
+function formatWeekRange(weekKey) {
+  const start = getDayDate(weekKey, 0)
+  const end = getDayDate(weekKey, 6)
+  const fmt = (d) => d.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })
+  return `${fmt(start)} – ${fmt(end)}`
+}
+
+function dayNameForIdx(dayIdx, startDayOfWeek) {
+  return DAYS[(startDayOfWeek + dayIdx) % 7]
 }
 
 function isToday(date) {
@@ -250,7 +242,7 @@ async function callGeminiRecipe(dishName) {
   return text.trim()
 }
 
-function getDietWarnings(slots, ingredients, colorOverrides) {
+function getDietWarnings(slots, ingredients, colorOverrides, startDayOfWeek = 0) {
   const dayCats = DAYS.map((_, dayIdx) => {
     const daySlots = slots.filter((s) => s.day_idx === dayIdx)
     if (!daySlots.length) return null
@@ -279,7 +271,7 @@ function getDietWarnings(slots, ingredients, colorOverrides) {
     if (!same) {
       const len = i - runStart
       if (len >= 2 && dayCats[runStart] && !ALERT_EXCLUDED.has(dayCats[runStart])) {
-        warnings.push({ category: dayCats[runStart], days: DAYS.slice(runStart, i) })
+        warnings.push({ category: dayCats[runStart], days: Array.from({ length: i - runStart }, (_, k) => dayNameForIdx(runStart + k, startDayOfWeek)) })
       }
       runStart = i
     }
@@ -380,7 +372,7 @@ function PostitContent({ slot, onEdit, onDelete, dragHandleRef, dragListeners, d
 
 // ─── DishModal ────────────────────────────────────────────────────────────────
 
-function DishModal({ mode, slot, dayIdx, slotKey, ingredients, slots, onClose, onSave, onIngredientAdded }) {
+function DishModal({ mode, slot, dayIdx, slotKey, startDayOfWeek, ingredients, slots, onClose, onSave, onIngredientAdded }) {
   const [dishName, setDishName] = useState(mode === 'edit' ? slot.dish_name : '')
   const [effort, setEffort] = useState(mode === 'edit' ? (slot.effort_override || 1) : 1)
   const [selectedIds, setSelectedIds] = useState(mode === 'edit' ? (slot.ingredient_ids || []) : [])
@@ -492,7 +484,7 @@ function DishModal({ mode, slot, dayIdx, slotKey, ingredients, slots, onClose, o
   }
 
   const title = mode === 'edit' ? 'Editar plato' : 'Añadir plato'
-  const dayLabel = mode === 'add' ? ` — ${DAYS[dayIdx]}, ${SLOTS.find((s) => s.key === slotKey)?.label}` : ''
+  const dayLabel = mode === 'add' ? ` — ${dayNameForIdx(dayIdx, startDayOfWeek ?? 0)}, ${SLOTS.find((s) => s.key === slotKey)?.label}` : ''
 
   return (
     <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
@@ -923,7 +915,9 @@ function RecipeModal({ slot, onClose }) {
 
 export default function App() {
   const [weekOffset, setWeekOffset] = useState(0)
-  const weekKey = getWeekKey(weekOffset)
+  const [startDayOfWeek, setStartDayOfWeekRaw] = useState(() => parseInt(localStorage.getItem('startDayOfWeek') || '0'))
+  const setStartDayOfWeek = (val) => { setStartDayOfWeekRaw(val); localStorage.setItem('startDayOfWeek', val) }
+  const weekKey = getWeekKey(weekOffset, startDayOfWeek)
 
   const [slots, setSlots] = useState([])
   const [ingredients, setIngredients] = useState([])
@@ -1336,7 +1330,7 @@ export default function App() {
   }
 
   const activeSlot = activeId ? slots.find((s) => s.id === activeId) : null
-  const dietWarnings = useMemo(() => getDietWarnings(slots, ingredients, colorOverrides), [slots, ingredients, colorOverrides])
+  const dietWarnings = useMemo(() => getDietWarnings(slots, ingredients, colorOverrides, startDayOfWeek), [slots, ingredients, colorOverrides, startDayOfWeek])
 
   if (loading) {
     return (
@@ -1352,11 +1346,11 @@ export default function App() {
       <header className="app-header">
         <h1>🗒️ Pizarra Semanal</h1>
         <div className="week-nav">
-          <button onClick={() => setWeekOffset((w) => w - 1)} title="Semana anterior">
+          <button onClick={() => setWeekOffset((w) => w - 1)} title="7 días atrás">
             <ChevronLeft size={16} />
           </button>
           <span>{formatWeekRange(weekKey)}</span>
-          <button onClick={() => setWeekOffset((w) => w + 1)} title="Semana siguiente">
+          <button onClick={() => setWeekOffset((w) => w + 1)} title="7 días adelante">
             <ChevronRight size={16} />
           </button>
           {weekOffset !== 0 && (
@@ -1364,6 +1358,19 @@ export default function App() {
               Hoy
             </button>
           )}
+        </div>
+        <div className="start-day-picker">
+          <span className="start-day-label">Empieza el</span>
+          {['L', 'M', 'X', 'J', 'V', 'S', 'D'].map((abbr, i) => (
+            <button
+              key={i}
+              className={`start-day-btn${startDayOfWeek === i ? ' active' : ''}`}
+              onClick={() => { setStartDayOfWeek(i); setWeekOffset(0) }}
+              title={DAYS[i]}
+            >
+              {abbr}
+            </button>
+          ))}
         </div>
       </header>
 
@@ -1391,11 +1398,12 @@ export default function App() {
           <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
             <div className="board">
               <div className="board-header-empty" />
-              {DAYS.map((day, i) => {
+              {DAYS.map((_, i) => {
                 const date = getDayDate(weekKey, i)
+                const name = dayNameForIdx(i, startDayOfWeek)
                 return (
-                  <div key={day} className={`board-day-header${isToday(date) ? ' today' : ''}`}>
-                    <div className="day-name">{day}</div>
+                  <div key={i} className={`board-day-header${isToday(date) ? ' today' : ''}`}>
+                    <div className="day-name">{name}</div>
                     <div className="day-date">
                       {date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
                     </div>
@@ -1592,6 +1600,7 @@ export default function App() {
           mode="add"
           dayIdx={addModal.dayIdx}
           slotKey={addModal.slotKey}
+          startDayOfWeek={startDayOfWeek}
           ingredients={ingredients}
           slots={slots}
           onClose={() => setAddModal(null)}
