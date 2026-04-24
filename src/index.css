@@ -38,6 +38,9 @@
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.10), 0 1px 2px rgba(0,0,0,0.06);
   --shadow: 0 4px 12px rgba(0,0,0,0.12), 0 2px 4px rgba(0,0,0,0.08);
   --shadow-lg: 0 10px 30px rgba(0,0,0,0.18), 0 4px 8px rgba(0,0,0,0.10);
+  --postit-text: #1c1917;
+  --accent-glow: rgba(122, 92, 56, 0.35);
+  --today-cell-bg: #f0ead8;
 }
 
 html, body {
@@ -115,10 +118,14 @@ html, body {
 }
 
 .week-nav span {
-  min-width: 140px;
+  min-width: 110px;
+  max-width: 160px;
   text-align: center;
   font-weight: 700;
   color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .btn-today {
@@ -232,13 +239,16 @@ html, body {
 .board-slot-label {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  padding-right: 6px;
-  font-size: 10px;
+  justify-content: center;
+  padding-right: 4px;
+  font-size: 11px;
   font-weight: 700;
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  white-space: nowrap;
 }
 
 .board-cell {
@@ -257,6 +267,11 @@ html, body {
 .board-cell.drag-over {
   border-color: var(--accent);
   background: var(--accent-light);
+}
+
+.board-cell.today-col {
+  border-color: var(--accent);
+  background: var(--today-cell-bg);
 }
 
 .board-cell-add {
@@ -284,6 +299,18 @@ html, body {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--accent-light);
+}
+
+.btn-add-slot.has-items {
+  padding: 2px;
+  font-size: 10px;
+  opacity: 0.45;
+  border-color: var(--border-soft);
+}
+
+.btn-add-slot.has-items:hover {
+  opacity: 1;
+  border-color: var(--accent);
 }
 
 /* ─── Post-it ─── */
@@ -333,7 +360,7 @@ html, body {
   font-family: 'Milk Choco', 'Caveat', cursive;
   font-size: 15px;
   font-weight: 400;
-  color: #1c1917;
+  color: var(--postit-text);
   line-height: 1.3;
   width: 100%;
   text-align: center;
@@ -365,14 +392,14 @@ html, body {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  color: #78716c;
+  color: var(--text-muted);
   transition: background 0.15s, color 0.15s;
   padding: 0;
 }
 
 .postit-btn:hover {
   background: rgba(0,0,0,0.15);
-  color: #1c1917;
+  color: var(--postit-text);
 }
 
 .postit-btn.delete:hover {
@@ -389,7 +416,7 @@ html, body {
 
 .drag-handle {
   cursor: grab;
-  color: #a8a29e;
+  color: var(--border);
   opacity: 0;
   transition: opacity 0.15s;
   display: flex;
@@ -403,7 +430,7 @@ html, body {
 }
 
 .drag-handle:hover {
-  color: #57534e;
+  color: var(--text-muted);
   background: rgba(0,0,0,0.06);
 }
 
@@ -515,8 +542,7 @@ html, body {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--accent);
-  padding: 2px 0 6px;
-  border-bottom: 1.5px solid var(--border-soft);
+  padding: 2px 0 6px 8px;
   margin-bottom: 6px;
 }
 
@@ -583,6 +609,47 @@ html, body {
 
 .btn-clear-purchased:hover {
   background: #fecaca;
+}
+
+.shopping-footer-sticky {
+  position: sticky;
+  bottom: 0;
+  background: var(--surface);
+  padding: 8px 0 2px;
+  margin-top: 8px;
+  border-top: 1.5px solid var(--border-soft);
+}
+
+/* ─── Shopping progress ─── */
+.shopping-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1.5px solid var(--border-soft);
+}
+
+.shopping-progress-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--surface3);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+
+.shopping-progress-fill {
+  height: 100%;
+  background: var(--green);
+  border-radius: var(--radius-pill);
+  transition: width 0.3s ease;
+}
+
+.shopping-progress-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 
 /* ─── Popover ─── */
@@ -859,7 +926,7 @@ html, body {
 }
 
 .ai-suggest-btn:hover:not(:disabled) {
-  background: #bfdbfe;
+  background: var(--accent-light);
   transform: translateY(-1px);
 }
 
@@ -943,7 +1010,7 @@ html, body {
 }
 
 .chip-add-custom:hover {
-  background: #bfdbfe;
+  background: var(--surface3);
 }
 
 .chip-ai-new {
@@ -1001,13 +1068,13 @@ html, body {
 .btn-primary {
   background: var(--accent);
   color: #fff;
-  box-shadow: 0 2px 8px rgba(74, 144, 217, 0.4);
+  box-shadow: 0 2px 8px var(--accent-glow);
 }
 
 .btn-primary:hover:not(:disabled) {
   background: var(--accent-hover);
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(74, 144, 217, 0.5);
+  box-shadow: 0 4px 14px var(--accent-glow);
 }
 
 .btn-ghost {
@@ -1037,7 +1104,7 @@ html, body {
   cursor: pointer;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 16px rgba(74, 144, 217, 0.5);
+  box-shadow: 0 4px 16px var(--accent-glow);
   transition: background 0.15s, transform 0.15s;
 }
 
@@ -1097,9 +1164,9 @@ html, body {
   bottom: 24px;
   left: 50%;
   transform: translateX(-50%);
-  background: #7f1d1d;
-  border: 1.5px solid var(--red);
-  color: #fca5a5;
+  background: var(--accent-hover);
+  border: 1.5px solid var(--accent);
+  color: var(--accent-light);
   padding: 10px 20px;
   border-radius: var(--radius-pill);
   font-size: 13px;
@@ -1177,6 +1244,13 @@ html, body {
 }
 
 /* ─── Responsive ─── */
+@media (max-width: 860px) {
+  .app-header { flex-wrap: wrap; row-gap: 6px; }
+  .app-header h1 { flex: 0 0 auto; }
+  .week-nav { order: 2; flex: 1 1 auto; justify-content: center; }
+  .start-day-picker { order: 3; width: 100%; justify-content: center; }
+}
+
 @media (max-width: 768px) {
   .sidebar {
     display: none;
@@ -1202,6 +1276,59 @@ html, body {
   .app-header h1 {
     font-size: 22px;
   }
+
+  .board {
+    grid-template-columns: 52px repeat(7, minmax(88px, 1fr));
+    min-width: 680px;
+    gap: 5px;
+  }
+
+  .board-wrapper {
+    padding: 10px 8px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .board-cell {
+    min-height: 68px;
+    padding: 4px;
+  }
+
+  .board-day-header {
+    padding: 5px 3px;
+  }
+
+  .board-day-header .day-name {
+    font-size: 12px;
+  }
+
+  .board-day-header .day-date {
+    font-size: 10px;
+  }
+
+  .dishes-tray-list {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 6px;
+  }
+
+  .pool-postit {
+    flex-shrink: 0;
+  }
+
+  .dishes-tray {
+    padding: 8px 10px 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-header h1 { font-size: 18px; }
+  .week-nav { font-size: 11px; }
+  .week-nav span { min-width: 90px; }
+  .start-day-btn { width: 22px; height: 22px; font-size: 10px; }
+  .sidebar.mobile-open { width: 100%; }
+  .modal { max-height: 95vh; }
+  .modal-body { padding: 12px 14px; }
 }
 
 /* ─── Context menu ─── */
@@ -1311,9 +1438,25 @@ html, body {
 .custom-item-add {
   display: flex;
   gap: 6px;
-  margin-top: 12px;
-  padding-top: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
   border-top: 1.5px dashed var(--border);
+  position: relative;
+}
+
+.custom-item-add::before {
+  content: 'Extra';
+  position: absolute;
+  top: -9px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface);
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
 }
 
 .custom-item-input {
@@ -1399,7 +1542,7 @@ html, body {
   border-bottom: 1.5px solid var(--accent);
   font-family: 'Milk Choco', 'Caveat', cursive;
   font-size: 14px;
-  color: #1c1917;
+  color: var(--postit-text);
   outline: none;
   padding: 0 0 2px;
   text-align: center;

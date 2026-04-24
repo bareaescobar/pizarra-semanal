@@ -281,10 +281,10 @@ function getDietWarnings(slots, ingredients, colorOverrides, startDayOfWeek = 0)
 
 // ─── DnD components ───────────────────────────────────────────────────────────
 
-function DroppableCell({ id, children }) {
+function DroppableCell({ id, children, isToday: isTodayCol }) {
   const { setNodeRef, isOver } = useDroppable({ id })
   return (
-    <div ref={setNodeRef} className={`board-cell${isOver ? ' drag-over' : ''}`}>
+    <div ref={setNodeRef} className={`board-cell${isOver ? ' drag-over' : ''}${isTodayCol ? ' today-col' : ''}`}>
       {children}
     </div>
   )
@@ -1275,6 +1275,13 @@ export default function App() {
 
   const totalItems = shoppingList.reduce((acc, cat) => acc + cat.items.length, 0)
 
+  const allItemIds = [
+    ...shoppingList.flatMap((cat) => cat.items.map(({ ingredient }) => ingredient.id)),
+    ...customItems.map((item) => 'custom_' + item.id),
+  ]
+  const totalCheckable = allItemIds.length
+  const purchasedCount = allItemIds.filter((id) => purchasedIds.has(id)).length
+
   function togglePurchased(id) {
     setPurchasedIds((prev) => {
       const next = new Set(prev)
@@ -1419,8 +1426,9 @@ export default function App() {
                     const cellSlots = slots.filter(
                       (s) => s.day_idx === dayIdx && s.slot_key === slot.key
                     )
+                    const isTodayCol = isToday(getDayDate(weekKey, dayIdx))
                     return (
-                      <DroppableCell key={cellId} id={cellId}>
+                      <DroppableCell key={cellId} id={cellId} isToday={isTodayCol}>
                         {cellSlots.map((s) => (
                           <DraggablePostit
                             key={s.id}
@@ -1434,7 +1442,7 @@ export default function App() {
                         ))}
                         <div className="board-cell-add">
                           <button
-                            className={`btn-add-slot${copyingSlot || movingSlot ? ' copy-target' : ''}`}
+                            className={`btn-add-slot${copyingSlot || movingSlot ? ' copy-target' : ''}${cellSlots.length > 0 ? ' has-items' : ''}`}
                             onClick={() => {
                               if (copyingSlot) handleCopySlot(dayIdx, slot.key)
                               else if (movingSlot) handleMoveSlot(dayIdx, slot.key)
@@ -1461,7 +1469,10 @@ export default function App() {
                     })()
                   : (() => {
                       const s = slots.find((x) => x.id === activeId)
-                      return s ? <div className="postit-overlay"><PostitContent slot={s} onEdit={() => {}} onDelete={() => {}} dragHandleRef={null} /></div> : null
+                      if (!s) return null
+                      const cat = colorOverrides[s.id] || getDominantCategory(s.ingredient_ids, ingredients, s.dish_name)
+                      const bg = cat ? (CATEGORY_PASTELS[cat] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
+                      return <div className="postit-overlay" style={{ background: bg }}><span className="postit-name">{s.dish_name}</span></div>
                     })()
               )}
             </DragOverlay>
@@ -1505,6 +1516,11 @@ export default function App() {
                 {totalItems > 0 && <span className="sidebar-count">({totalItems})</span>}
               </h2>
               <div className="sidebar-actions">
+                {purchasedIds.size > 0 && (
+                  <button className="sidebar-icon-btn" title="Desmarcar todo" onClick={() => setPurchasedIds(new Set())}>
+                    <X size={14} />
+                  </button>
+                )}
                 <button className="sidebar-icon-btn" title="Historial de listas" onClick={handleOpenHistory}>
                   <History size={16} />
                 </button>
@@ -1514,6 +1530,14 @@ export default function App() {
               </div>
             </div>
             <div className="sidebar-body">
+              {totalCheckable > 0 && (
+                <div className="shopping-progress">
+                  <div className="shopping-progress-bar">
+                    <div className="shopping-progress-fill" style={{ width: `${Math.round((purchasedCount / totalCheckable) * 100)}%` }} />
+                  </div>
+                  <span className="shopping-progress-label">{purchasedCount} de {totalCheckable}</span>
+                </div>
+              )}
               {shoppingList.length === 0 ? (
                 <p className="sidebar-empty">
                   Añade platos al tablero para ver los ingredientes aquí.
@@ -1532,7 +1556,7 @@ export default function App() {
                       if (!regular.length && !custom.length) return null
                       return (
                         <div key={category} className="shopping-category">
-                          <div className="shopping-category-title">{category}</div>
+                          <div className="shopping-category-title" style={{ borderLeft: `3px solid ${CATEGORY_COLORS[category] ?? 'var(--accent)'}`, paddingLeft: 8 }}>{category}</div>
                           {regular.map(({ ingredient, dishes }) => (
                             <div key={ingredient.id} className={`shopping-item${purchasedIds.has(ingredient.id) ? ' purchased' : ''}`}>
                               <input type="checkbox" checked={purchasedIds.has(ingredient.id)} onChange={() => togglePurchased(ingredient.id)} />
@@ -1554,17 +1578,18 @@ export default function App() {
                       )
                     })
                   })()}
-                  {purchasedIds.size > 0 && (
-                    <button
-                      className="btn-clear-purchased"
-                      onClick={handleSaveAndClear}
-                      disabled={savingList}
-                    >
-                      {savingList ? 'Guardando…' : `Guardar y limpiar (${purchasedIds.size})`}
-                    </button>
-                  )}
                 </>
               )}
+              <div className="shopping-footer-sticky">
+                <button
+                  className="btn-clear-purchased"
+                  onClick={handleSaveAndClear}
+                  disabled={savingList || purchasedIds.size === 0}
+                  style={{ opacity: purchasedIds.size === 0 ? 0.45 : 1, marginTop: 0 }}
+                >
+                  {savingList ? 'Guardando…' : purchasedIds.size > 0 ? `Guardar y limpiar (${purchasedIds.size})` : 'Guardar y limpiar'}
+                </button>
+              </div>
               <div className="custom-item-add">
                 <input
                   type="text"
