@@ -13,39 +13,39 @@
 }
 
 :root {
-  --bg: #ede8df;
-  --surface: #f7f3ec;
-  --surface2: #ede5d6;
-  --surface3: #e0d5c2;
-  --border: #bfb09a;
-  --border-soft: #d0c4ae;
-  --text: #2b1d0e;
-  --text-muted: #7a6347;
-  --accent: #7a5c38;
-  --accent-hover: #5c4020;
-  --accent-light: #e8dcc8;
-  --postit: #fdf0a0;
-  --postit-shadow: #c49a1a;
-  --green: #4a7030;
-  --green-light: #d8e8c8;
-  --yellow: #b87020;
-  --yellow-light: #f2e0c0;
-  --red: #943020;
-  --red-light: #eed0c8;
-  --radius: 12px;
-  --radius-lg: 18px;
+  --bg: #f0f4ff;
+  --surface: #ffffff;
+  --surface2: #f8fafc;
+  --surface3: #f1f5f9;
+  --border: #e2e8f0;
+  --border-soft: #f1f5f9;
+  --text: #0f172a;
+  --text-muted: #64748b;
+  --accent: #6366f1;
+  --accent-hover: #4f46e5;
+  --accent-light: #eef2ff;
+  --postit: #fef9c3;
+  --postit-shadow: #fbbf24;
+  --postit-text: #1e293b;
+  --green: #16a34a;
+  --green-light: #dcfce7;
+  --yellow: #ca8a04;
+  --yellow-light: #fef9c3;
+  --red: #dc2626;
+  --red-light: #fee2e2;
+  --radius: 14px;
+  --radius-lg: 20px;
   --radius-pill: 999px;
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.10), 0 1px 2px rgba(0,0,0,0.06);
-  --shadow: 0 4px 12px rgba(0,0,0,0.12), 0 2px 4px rgba(0,0,0,0.08);
-  --shadow-lg: 0 10px 30px rgba(0,0,0,0.18), 0 4px 8px rgba(0,0,0,0.10);
-  --postit-text: #1c1917;
-  --accent-glow: rgba(122, 92, 56, 0.35);
-  --today-cell-bg: #f0ead8;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow: 0 4px 14px rgba(0,0,0,0.09), 0 2px 4px rgba(0,0,0,0.05);
+  --shadow-lg: 0 12px 32px rgba(0,0,0,0.13), 0 4px 8px rgba(0,0,0,0.07);
+  --accent-glow: rgba(99, 102, 241, 0.25);
+  --today-cell-bg: #eef2ff;
 }
 
 html, body {
   height: 100%;
-  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-family: 'Nunito', 'Segoe UI', system-ui, -apple-system, sans-serif;
   background: var(--bg);
   color: var(--text);
   font-size: 14px;
@@ -84,11 +84,12 @@ html, body {
 }
 
 .app-header h1 {
-  font-size: 26px;
-  font-weight: 700;
-  font-family: 'Milk Choco', 'Caveat', cursive;
-  color: var(--text);
+  font-size: 22px;
+  font-weight: 900;
+  font-family: 'Nunito', system-ui, sans-serif;
+  color: var(--accent);
   white-space: nowrap;
+  letter-spacing: -0.3px;
 }
 
 .week-nav {
@@ -121,11 +122,12 @@ html, body {
   min-width: 110px;
   max-width: 160px;
   text-align: center;
-  font-weight: 700;
+  font-weight: 800;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-size: 14px;
 }
 
 .btn-today {
@@ -207,33 +209,40 @@ html, body {
 
 .board-day-header {
   background: var(--surface);
-  border: 1.5px solid var(--border);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 8px 6px;
+  padding: 6px 6px 7px;
   text-align: center;
   box-shadow: var(--shadow-sm);
+  overflow: hidden;
 }
 
 .board-day-header .day-name {
-  font-family: 'Milk Choco', 'Caveat', cursive;
-  font-weight: 700;
-  font-size: 15px;
+  font-family: 'Nunito', system-ui, sans-serif;
+  font-weight: 800;
+  font-size: 13px;
   color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .board-day-header .day-date {
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 700;
   color: var(--text-muted);
-  margin-top: 2px;
+  margin-top: 1px;
 }
 
 .board-day-header.today {
-  border-color: var(--accent);
   background: var(--accent-light);
 }
 
 .board-day-header.today .day-name {
-  color: var(--accent-hover);
+  color: var(--accent);
+}
+
+.board-day-header.today .day-date {
+  color: var(--accent);
 }
 
 .board-slot-label {
@@ -316,20 +325,20 @@ html, body {
 /* ─── Post-it ─── */
 .postit {
   background: var(--postit);
-  border-radius: 8px;
-  border: 1.5px solid rgba(0,0,0,0.08);
-  padding: 8px 6px 6px;
+  border-radius: 12px;
+  border: none;
+  padding: 10px 8px 7px;
   position: relative;
-  box-shadow: var(--shadow);
+  box-shadow: 0 3px 8px rgba(0,0,0,0.12), 0 1px 3px rgba(0,0,0,0.08);
   cursor: default;
   user-select: none;
   transform: rotate(var(--base-rotate, 0deg));
-  transition: transform 0.2s, box-shadow 0.2s, opacity 0.15s;
+  transition: transform 0.18s, box-shadow 0.18s, opacity 0.15s;
 }
 
 .postit:hover {
-  transform: rotate(calc(var(--base-rotate, 0deg) - 1.5deg)) translateY(-3px) scale(1.04);
-  box-shadow: var(--shadow-lg);
+  transform: rotate(calc(var(--base-rotate, 0deg) - 1.5deg)) translateY(-4px) scale(1.05);
+  box-shadow: 0 12px 28px rgba(0,0,0,0.18), 0 4px 8px rgba(0,0,0,0.10);
   z-index: 10;
   position: relative;
 }
@@ -341,10 +350,10 @@ html, body {
 
 .postit-overlay {
   background: var(--postit);
-  border-radius: 8px;
-  border: 1.5px solid rgba(0,0,0,0.08);
-  padding: 8px 6px 6px;
-  box-shadow: 6px 10px 24px rgba(0,0,0,0.25);
+  border-radius: 12px;
+  border: none;
+  padding: 10px 8px 7px;
+  box-shadow: 6px 12px 28px rgba(0,0,0,0.22);
   transform: rotate(3deg) scale(1.06);
   pointer-events: none;
   min-width: 110px;
@@ -357,9 +366,9 @@ html, body {
 }
 
 .postit-name {
-  font-family: 'Milk Choco', 'Caveat', cursive;
-  font-size: 15px;
-  font-weight: 400;
+  font-family: 'Nunito', system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 700;
   color: var(--postit-text);
   line-height: 1.3;
   width: 100%;
@@ -476,9 +485,9 @@ html, body {
 }
 
 .sidebar-header h2 {
-  font-family: 'Milk Choco', 'Caveat', cursive;
-  font-size: 18px;
-  font-weight: 700;
+  font-family: 'Nunito', system-ui, sans-serif;
+  font-size: 17px;
+  font-weight: 800;
   color: var(--text);
   display: flex;
   align-items: center;
@@ -714,9 +723,9 @@ html, body {
 }
 
 .modal-header h3 {
-  font-family: 'Milk Choco', 'Caveat', cursive;
-  font-size: 20px;
-  font-weight: 700;
+  font-family: 'Nunito', system-ui, sans-serif;
+  font-size: 19px;
+  font-weight: 800;
   color: var(--text);
 }
 
@@ -1540,8 +1549,9 @@ html, body {
   background: transparent;
   border: none;
   border-bottom: 1.5px solid var(--accent);
-  font-family: 'Milk Choco', 'Caveat', cursive;
-  font-size: 14px;
+  font-family: 'Nunito', system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 700;
   color: var(--postit-text);
   outline: none;
   padding: 0 0 2px;

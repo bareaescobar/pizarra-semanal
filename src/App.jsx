@@ -54,20 +54,23 @@ const CATEGORY_COLORS = {
 }
 
 const CATEGORY_PASTELS = {
-  'Verduras y Hortalizas':  '#d1fae5',
-  'Frutas':                 '#fce7f3',
-  'Carnes':                 '#fee2e2',
-  'Pescados y Mariscos':    '#dbeafe',
-  'Lácteos y Huevos':       '#fef3c7',
-  'Legumbres y Cereales':   '#ede9fe',
-  'Pasta y Arroz':          '#fef9c3',
-  'Conservas y Preparados': '#cffafe',
-  'Condimentos y Especias': '#ffedd5',
-  'Aceites y Vinagres':     '#ecfccb',
-  'Guisos':                 '#fde8d1',
-  'Comer fuera':            '#e2e8f0',
-  'Otros':                  '#fef08a',
+  'Verduras y Hortalizas':  '#bbf7d0',
+  'Frutas':                 '#fbcfe8',
+  'Carnes':                 '#fecaca',
+  'Pescados y Mariscos':    '#bfdbfe',
+  'Lácteos y Huevos':       '#fde68a',
+  'Legumbres y Cereales':   '#ddd6fe',
+  'Pasta y Arroz':          '#fef08a',
+  'Conservas y Preparados': '#a5f3fc',
+  'Condimentos y Especias': '#fed7aa',
+  'Aceites y Vinagres':     '#d9f99d',
+  'Guisos':                 '#fcd34d',
+  'Comer fuera':            '#cbd5e1',
+  'Otros':                  '#fef9c3',
 }
+
+// Accent color per column (day 0..6 from startDayOfWeek)
+const DAY_ACCENT_COLORS = ['#f87171','#fb923c','#facc15','#4ade80','#60a5fa','#a78bfa','#f472b6']
 
 // Types available in context-menu color picker
 const FOOD_TYPES = [
@@ -1409,7 +1412,11 @@ export default function App() {
                 const date = getDayDate(weekKey, i)
                 const name = dayNameForIdx(i, startDayOfWeek)
                 return (
-                  <div key={i} className={`board-day-header${isToday(date) ? ' today' : ''}`}>
+                  <div
+                    key={i}
+                    className={`board-day-header${isToday(date) ? ' today' : ''}`}
+                    style={{ borderTop: `4px solid ${DAY_ACCENT_COLORS[i % 7]}` }}
+                  >
                     <div className="day-name">{name}</div>
                     <div className="day-date">
                       {date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
