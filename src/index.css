@@ -84,12 +84,11 @@ html, body {
 }
 
 .app-header h1 {
-  font-size: 22px;
-  font-weight: 900;
-  font-family: 'Nunito', system-ui, sans-serif;
-  color: var(--accent);
+  font-size: 26px;
+  font-weight: 700;
+  font-family: 'Milk Choco', 'Caveat', cursive;
+  color: var(--text);
   white-space: nowrap;
-  letter-spacing: -0.3px;
 }
 
 .week-nav {
@@ -185,7 +184,16 @@ html, body {
 
 .app-body {
   display: flex;
+  flex-direction: column;
   flex: 1;
+  overflow: hidden;
+}
+
+/* Row containing board + sidebar */
+.app-top {
+  display: flex;
+  flex: 0 0 60%;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -193,7 +201,7 @@ html, body {
 .board-wrapper {
   flex: 1;
   overflow: auto;
-  padding: 16px;
+  padding: 16px 16px 10px;
 }
 
 .board {
@@ -218,19 +226,17 @@ html, body {
 }
 
 .board-day-header .day-name {
-  font-family: 'Nunito', system-ui, sans-serif;
-  font-weight: 800;
-  font-size: 13px;
+  font-family: 'Milk Choco', 'Caveat', cursive;
+  font-weight: 700;
+  font-size: 15px;
   color: var(--text);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .board-day-header .day-date {
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 600;
   color: var(--text-muted);
-  margin-top: 1px;
+  margin-top: 2px;
 }
 
 .board-day-header.today {
@@ -366,9 +372,9 @@ html, body {
 }
 
 .postit-name {
-  font-family: 'Nunito', system-ui, sans-serif;
-  font-size: 14px;
-  font-weight: 700;
+  font-family: 'Milk Choco', 'Caveat', cursive;
+  font-size: 15px;
+  font-weight: 400;
   color: var(--postit-text);
   line-height: 1.3;
   width: 100%;
@@ -485,9 +491,9 @@ html, body {
 }
 
 .sidebar-header h2 {
-  font-family: 'Nunito', system-ui, sans-serif;
-  font-size: 17px;
-  font-weight: 800;
+  font-family: 'Milk Choco', 'Caveat', cursive;
+  font-size: 18px;
+  font-weight: 700;
   color: var(--text);
   display: flex;
   align-items: center;
@@ -723,9 +729,9 @@ html, body {
 }
 
 .modal-header h3 {
-  font-family: 'Nunito', system-ui, sans-serif;
-  font-size: 19px;
-  font-weight: 800;
+  font-family: 'Milk Choco', 'Caveat', cursive;
+  font-size: 20px;
+  font-weight: 700;
   color: var(--text);
 }
 
@@ -1261,6 +1267,8 @@ html, body {
 }
 
 @media (max-width: 768px) {
+  .app-top { flex: 0 0 70%; }
+
   .sidebar {
     display: none;
   }
@@ -1511,10 +1519,12 @@ html, body {
 
 /* ─── Dishes tray / pool ─── */
 .dishes-tray {
-  border-top: 2px dashed var(--border);
-  padding: 10px 16px 14px;
+  flex: 1;
+  min-height: 0;
+  border-top: 3px dashed var(--border);
+  padding: 10px 20px 14px;
   background: var(--surface2);
-  flex-shrink: 0;
+  overflow-y: auto;
 }
 
 .dishes-tray-header {
@@ -1549,9 +1559,8 @@ html, body {
   background: transparent;
   border: none;
   border-bottom: 1.5px solid var(--accent);
-  font-family: 'Nunito', system-ui, sans-serif;
-  font-size: 13px;
-  font-weight: 700;
+  font-family: 'Milk Choco', 'Caveat', cursive;
+  font-size: 14px;
   color: var(--postit-text);
   outline: none;
   padding: 0 0 2px;

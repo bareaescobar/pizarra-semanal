@@ -1385,6 +1385,7 @@ export default function App() {
       </header>
 
       <div className="app-body">
+        <div className="app-top">
         <div className="board-wrapper">
           {(copyingSlot || movingSlot) && (
             <div className="copy-banner">
@@ -1484,33 +1485,7 @@ export default function App() {
               )}
             </DragOverlay>
           </DndContext>
-
-          <div className="dishes-tray">
-            <div className="dishes-tray-header">
-              <span className="dishes-tray-label">Mi despensa — post-its sin día asignado</span>
-              <button
-                className="btn-add-slot"
-                style={{ width: 'auto', padding: '3px 10px', fontSize: 11 }}
-                onClick={() => setPoolItems((prev) => [...prev, { id: Date.now().toString(), dish_name: '', effort: 1 }])}
-              >
-                <Plus size={11} /> Nuevo
-              </button>
-            </div>
-            <div className="dishes-tray-list">
-              {poolItems.map((item) => (
-                <PoolPostit
-                  key={item.id}
-                  item={item}
-                  ingredients={ingredients}
-                  onUpdate={(updated) => setPoolItems((prev) => prev.map((p) => p.id === item.id ? updated : p))}
-                  onDelete={() => setPoolItems((prev) => prev.filter((p) => p.id !== item.id))}
-                  onContextMenu={(e, slot) => setContextMenu({ x: e.clientX, y: e.clientY, slot, isPool: true })}
-                />
-              ))}
-            </div>
-          </div>
         </div>
-
         <>
           {shoppingOpen && (
             <div className="sidebar-overlay" onClick={() => setShoppingOpen(false)} />
@@ -1620,7 +1595,33 @@ export default function App() {
             </div>
           </aside>
         </>
-      </div>
+        </div>{/* /app-top */}
+
+        <div className="dishes-tray">
+          <div className="dishes-tray-header">
+            <span className="dishes-tray-label">Mi despensa — post-its sin día asignado</span>
+            <button
+              className="btn-add-slot"
+              style={{ width: 'auto', padding: '3px 10px', fontSize: 11 }}
+              onClick={() => setPoolItems((prev) => [...prev, { id: Date.now().toString(), dish_name: '', effort: 1 }])}
+            >
+              <Plus size={11} /> Nuevo
+            </button>
+          </div>
+          <div className="dishes-tray-list">
+            {poolItems.map((item) => (
+              <PoolPostit
+                key={item.id}
+                item={item}
+                ingredients={ingredients}
+                onUpdate={(updated) => setPoolItems((prev) => prev.map((p) => p.id === item.id ? updated : p))}
+                onDelete={() => setPoolItems((prev) => prev.filter((p) => p.id !== item.id))}
+                onContextMenu={(e, slot) => setContextMenu({ x: e.clientX, y: e.clientY, slot, isPool: true })}
+              />
+            ))}
+          </div>
+        </div>
+      </div>{/* /app-body */}
 
       <button className="fab" onClick={() => setShoppingOpen(true)} title="Lista de la compra">
         <ShoppingCart size={22} />
