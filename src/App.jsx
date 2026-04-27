@@ -69,9 +69,6 @@ const CATEGORY_PASTELS = {
   'Otros':                  '#fef9c3',
 }
 
-// Accent color per column (day 0..6 from startDayOfWeek)
-const DAY_ACCENT_COLORS = ['#f87171','#fb923c','#facc15','#4ade80','#60a5fa','#a78bfa','#f472b6']
-
 // Types available in context-menu color picker
 const FOOD_TYPES = [
   { key: 'Carnes',               label: 'Carnes',       emoji: '🥩' },
@@ -375,8 +372,8 @@ function PostitContent({ slot, onEdit, onDelete, dragHandleRef, dragListeners, d
 
 // ─── DishModal ────────────────────────────────────────────────────────────────
 
-function DishModal({ mode, slot, dayIdx, slotKey, startDayOfWeek, ingredients, slots, onClose, onSave, onIngredientAdded }) {
-  const [dishName, setDishName] = useState(mode === 'edit' ? slot.dish_name : '')
+function DishModal({ mode, slot, dayIdx, slotKey, startDayOfWeek, ingredients, slots, onClose, onSave, onIngredientAdded, savedRecipes = [], initialName = '' }) {
+  const [dishName, setDishName] = useState(mode === 'edit' ? slot.dish_name : initialName)
   const [effort, setEffort] = useState(mode === 'edit' ? (slot.effort_override || 1) : 1)
   const [selectedIds, setSelectedIds] = useState(mode === 'edit' ? (slot.ingredient_ids || []) : [])
   const [search, setSearch] = useState('')
@@ -385,7 +382,14 @@ function DishModal({ mode, slot, dayIdx, slotKey, startDayOfWeek, ingredients, s
   const [aiNewSuggestions, setAiNewSuggestions] = useState([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+  const [showSugg, setShowSugg] = useState(false)
   const inputRef = useRef(null)
+
+  const suggestions = useMemo(() => {
+    if (!dishName.trim()) return []
+    const q = dishName.toLowerCase()
+    return savedRecipes.filter((r) => r.name.toLowerCase().includes(q)).slice(0, 6)
+  }, [dishName, savedRecipes])
 
   useEffect(() => {
     setTimeout(() => inputRef.current?.focus(), 80)
@@ -498,16 +502,32 @@ function DishModal({ mode, slot, dayIdx, slotKey, startDayOfWeek, ingredients, s
         </div>
         <div className="modal-body">
           {/* Nombre */}
-          <div className="form-field">
+          <div className="form-field autocomplete-wrap">
             <label className="form-label">Nombre del plato</label>
             <input
               ref={inputRef}
               className="form-input"
               placeholder="Ej: Pasta carbonara"
               value={dishName}
-              onChange={(e) => setDishName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && !aiLoading && handleAiSuggest()}
+              enterKeyHint="done"
+              onChange={(e) => { setDishName(e.target.value); setShowSugg(true) }}
+              onFocus={() => setShowSugg(true)}
+              onBlur={() => setTimeout(() => setShowSugg(false), 150)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); if (dishName.trim()) handleSave() } }}
             />
+            {showSugg && suggestions.length > 0 && (
+              <div className="autocomplete-list">
+                {suggestions.map((r) => (
+                  <button
+                    key={r.id}
+                    className="autocomplete-item"
+                    onMouseDown={(e) => { e.preventDefault(); setDishName(r.name); setShowSugg(false) }}
+                  >
+                    {r.name}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Esfuerzo */}
@@ -740,6 +760,32 @@ function ShoppingHistoryModal({ history, onClose }) {
   )
 }
 
+// ─── RecipeChip ───────────────────────────────────────────────────────────────
+
+function RecipeChip({ recipe, onSelect, onDelete }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: `recipe-${recipe.id}` })
+  const style = transform ? { transform: `translate(${transform.x}px, ${transform.y}px)`, opacity: isDragging ? 0.4 : 1 } : {}
+  return (
+    <div
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      className="recipe-chip"
+      style={style}
+      onClick={onSelect}
+    >
+      <span className="recipe-chip-name">{recipe.name}</span>
+      <button
+        className="recipe-chip-del"
+        onMouseDown={(e) => { e.stopPropagation() }}
+        onClick={(e) => { e.stopPropagation(); onDelete() }}
+      >
+        <X size={10} />
+      </button>
+    </div>
+  )
+}
+
 // ─── PoolPostit ───────────────────────────────────────────────────────────────
 
 function PoolPostit({ item, ingredients, onUpdate, onDelete, onContextMenu }) {
@@ -967,6 +1013,26 @@ export default function App() {
     localStorage.setItem('customItems', JSON.stringify(next))
   }
 
+  const [savedRecipes, setSavedRecipesRaw] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('savedRecipes') || '[]') } catch { return [] }
+  })
+  const setSavedRecipes = (val) => {
+    const next = typeof val === 'function' ? val(savedRecipes) : val
+    setSavedRecipesRaw(next)
+    localStorage.setItem('savedRecipes', JSON.stringify(next))
+  }
+  function addToSavedRecipes(name) {
+    if (!name.trim()) return
+    setSavedRecipes((prev) =>
+      prev.some((r) => r.name.toLowerCase() === name.trim().toLowerCase())
+        ? prev
+        : [...prev, { id: Date.now().toString(), name: name.trim() }]
+    )
+  }
+
+  const [trayTab, setTrayTab] = useState('pool')
+  const [pendingRecipeName, setPendingRecipeName] = useState(null)
+
   const initDone = useRef(false)
 
   const sensors = useSensors(
@@ -1083,6 +1149,8 @@ export default function App() {
       })
     }
 
+    addToSavedRecipes(dishName)
+
     const boardSlot = await dbInsert('v2_board_slots', {
       week_key: weekKey,
       day_idx: dayIdx,
@@ -1124,6 +1192,7 @@ export default function App() {
       })
     }
 
+    addToSavedRecipes(dishName)
     await dbUpdate('v2_board_slots', slot.id, { dish_id: dish.id, effort_override: effort })
 
     setSlots((prev) =>
@@ -1217,7 +1286,16 @@ export default function App() {
     const [newDayIdx, newSlotKey] = over.id.split('-')
     if (isNaN(parseInt(newDayIdx))) return
 
-    // Tray item dropped on board
+    // Recipe chip dropped on board cell → open modal pre-filled
+    if (String(active.id).startsWith('recipe-')) {
+      const recipeId = String(active.id).replace('recipe-', '')
+      const recipe = savedRecipes.find((r) => r.id === recipeId)
+      if (!recipe) return
+      setAddModal({ dayIdx: parseInt(newDayIdx), slotKey: newSlotKey, initialName: recipe.name })
+      return
+    }
+
+    // Pool item dropped on board
     if (String(active.id).startsWith('pool-')) {
       const poolId = String(active.id).replace('pool-', '')
       const poolItem = poolItems.find((p) => p.id === poolId)
@@ -1385,6 +1463,7 @@ export default function App() {
       </header>
 
       <div className="app-body">
+        <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
         <div className="app-top">
         <div className="board-wrapper">
           {(copyingSlot || movingSlot) && (
@@ -1406,7 +1485,6 @@ export default function App() {
               ))}
             </div>
           )}
-          <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
             <div className="board">
               <div className="board-header-empty" />
               {DAYS.map((_, i) => {
@@ -1416,7 +1494,6 @@ export default function App() {
                   <div
                     key={i}
                     className={`board-day-header${isToday(date) ? ' today' : ''}`}
-                    style={{ borderTop: `4px solid ${DAY_ACCENT_COLORS[i % 7]}` }}
                   >
                     <div className="day-name">{name}</div>
                     <div className="day-date">
@@ -1450,15 +1527,18 @@ export default function App() {
                         ))}
                         <div className="board-cell-add">
                           <button
-                            className={`btn-add-slot${copyingSlot || movingSlot ? ' copy-target' : ''}${cellSlots.length > 0 ? ' has-items' : ''}`}
+                            className={`btn-add-slot${copyingSlot || movingSlot ? ' copy-target' : ''}${pendingRecipeName ? ' copy-target' : ''}${cellSlots.length > 0 ? ' has-items' : ''}`}
                             onClick={() => {
                               if (copyingSlot) handleCopySlot(dayIdx, slot.key)
                               else if (movingSlot) handleMoveSlot(dayIdx, slot.key)
-                              else setAddModal({ dayIdx, slotKey: slot.key })
+                              else {
+                                setAddModal({ dayIdx, slotKey: slot.key, initialName: pendingRecipeName || undefined })
+                                setPendingRecipeName(null)
+                              }
                             }}
                           >
                             <Plus size={12} />
-                            <span>{copyingSlot ? 'Pegar aquí' : movingSlot ? 'Mover aquí' : 'Añadir'}</span>
+                            <span>{copyingSlot ? 'Pegar' : movingSlot ? 'Mover aquí' : pendingRecipeName ? 'Usar receta' : 'Añadir'}</span>
                           </button>
                         </div>
                       </DroppableCell>
@@ -1469,23 +1549,23 @@ export default function App() {
             </div>
 
             <DragOverlay dropAnimation={null}>
-              {activeId && (
-                String(activeId).startsWith('pool-')
-                  ? (() => {
-                      const p = poolItems.find((x) => x.id === String(activeId).replace('pool-', ''))
-                      return p ? <div className="tray-dish-overlay">{p.dish_name || '…'}</div> : null
-                    })()
-                  : (() => {
-                      const s = slots.find((x) => x.id === activeId)
-                      if (!s) return null
-                      const cat = colorOverrides[s.id] || getDominantCategory(s.ingredient_ids, ingredients, s.dish_name)
-                      const bg = cat ? (CATEGORY_PASTELS[cat] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
-                      return <div className="postit-overlay" style={{ background: bg }}><span className="postit-name">{s.dish_name}</span></div>
-                    })()
-              )}
+              {activeId && (() => {
+                if (String(activeId).startsWith('pool-')) {
+                  const p = poolItems.find((x) => x.id === String(activeId).replace('pool-', ''))
+                  return p ? <div className="tray-dish-overlay">{p.dish_name || '…'}</div> : null
+                }
+                if (String(activeId).startsWith('recipe-')) {
+                  const r = savedRecipes.find((x) => `recipe-${x.id}` === activeId)
+                  return r ? <div className="postit-overlay"><span className="postit-name">{r.name}</span></div> : null
+                }
+                const s = slots.find((x) => x.id === activeId)
+                if (!s) return null
+                const cat = colorOverrides[s.id] || getDominantCategory(s.ingredient_ids, ingredients, s.dish_name)
+                const bg = cat ? (CATEGORY_PASTELS[cat] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
+                return <div className="postit-overlay" style={{ background: bg }}><span className="postit-name">{s.dish_name}</span></div>
+              })()}
             </DragOverlay>
-          </DndContext>
-        </div>
+        </div>{/* /board-wrapper */}
         <>
           {shoppingOpen && (
             <div className="sidebar-overlay" onClick={() => setShoppingOpen(false)} />
@@ -1598,29 +1678,95 @@ export default function App() {
         </div>{/* /app-top */}
 
         <div className="dishes-tray">
-          <div className="dishes-tray-header">
-            <span className="dishes-tray-label">Mi despensa — post-its sin día asignado</span>
+          <div className="tray-tabs">
             <button
-              className="btn-add-slot"
-              style={{ width: 'auto', padding: '3px 10px', fontSize: 11 }}
-              onClick={() => setPoolItems((prev) => [...prev, { id: Date.now().toString(), dish_name: '', effort: 1 }])}
+              className={`tray-tab${trayTab === 'pool' ? ' active' : ''}`}
+              onClick={() => setTrayTab('pool')}
             >
-              <Plus size={11} /> Nuevo
+              Mi despensa
             </button>
+            <button
+              className={`tray-tab${trayTab === 'recipes' ? ' active' : ''}`}
+              onClick={() => setTrayTab('recipes')}
+            >
+              Recetas{savedRecipes.length > 0 && <span className="tray-tab-count">{savedRecipes.length}</span>}
+            </button>
+            {trayTab === 'pool' && (
+              <button
+                className="btn-add-slot tray-add-btn"
+                onClick={() => setPoolItems((prev) => [...prev, { id: Date.now().toString(), dish_name: '', effort: 1 }])}
+              >
+                <Plus size={11} /> Nuevo
+              </button>
+            )}
+            {trayTab === 'recipes' && (
+              <button
+                className="btn-add-slot tray-add-btn"
+                onClick={() => {
+                  const name = prompt('Nombre de la receta:')
+                  if (name?.trim()) addToSavedRecipes(name.trim())
+                }}
+              >
+                <Plus size={11} /> Receta
+              </button>
+            )}
           </div>
-          <div className="dishes-tray-list">
-            {poolItems.map((item) => (
-              <PoolPostit
-                key={item.id}
-                item={item}
-                ingredients={ingredients}
-                onUpdate={(updated) => setPoolItems((prev) => prev.map((p) => p.id === item.id ? updated : p))}
-                onDelete={() => setPoolItems((prev) => prev.filter((p) => p.id !== item.id))}
-                onContextMenu={(e, slot) => setContextMenu({ x: e.clientX, y: e.clientY, slot, isPool: true })}
-              />
-            ))}
-          </div>
+
+          {trayTab === 'pool' && (
+            <div className="tray-tab-content">
+              {movingSlot && !movingSlot.isPool && (
+                <button
+                  className="tray-move-zone"
+                  onClick={() => {
+                    setPoolItems((prev) => [...prev, { id: Date.now().toString(), dish_name: movingSlot.dish_name, effort: 1 }])
+                    handleDelete(movingSlot.id)
+                    setMovingSlot(null)
+                    showToast(`"${movingSlot.dish_name}" enviado a la despensa`)
+                  }}
+                >
+                  ⬇ Soltar aquí en la despensa
+                </button>
+              )}
+              {pendingRecipeName && (
+                <div className="copy-banner" style={{ marginBottom: 8 }}>
+                  <span>Añadiendo "{pendingRecipeName}" — haz clic en un hueco del tablero</span>
+                  <button onClick={() => setPendingRecipeName(null)}><X size={13} /></button>
+                </div>
+              )}
+              <div className="dishes-tray-list">
+                {poolItems.map((item) => (
+                  <PoolPostit
+                    key={item.id}
+                    item={item}
+                    ingredients={ingredients}
+                    onUpdate={(updated) => setPoolItems((prev) => prev.map((p) => p.id === item.id ? updated : p))}
+                    onDelete={() => setPoolItems((prev) => prev.filter((p) => p.id !== item.id))}
+                    onContextMenu={(e, slot) => setContextMenu({ x: e.clientX, y: e.clientY, slot, isPool: true })}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {trayTab === 'recipes' && (
+            <div className="tray-tab-content">
+              {savedRecipes.length === 0 && (
+                <p className="tray-empty">Aún no hay recetas. Se guardan automáticamente al crear platos.</p>
+              )}
+              <div className="dishes-tray-list">
+                {savedRecipes.map((recipe) => (
+                  <RecipeChip
+                    key={recipe.id}
+                    recipe={recipe}
+                    onSelect={() => { setPendingRecipeName(recipe.name); setTrayTab('pool') }}
+                    onDelete={() => setSavedRecipes((prev) => prev.filter((r) => r.id !== recipe.id))}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
+        </DndContext>
       </div>{/* /app-body */}
 
       <button className="fab" onClick={() => setShoppingOpen(true)} title="Lista de la compra">
@@ -1639,6 +1785,8 @@ export default function App() {
           onClose={() => setAddModal(null)}
           onSave={handleSaveDish}
           onIngredientAdded={handleIngredientAdded}
+          savedRecipes={savedRecipes}
+          initialName={addModal.initialName || ''}
         />
       )}
       {editModal && (
@@ -1650,6 +1798,7 @@ export default function App() {
           onClose={() => setEditModal(null)}
           onSave={handleEditDish}
           onIngredientAdded={handleIngredientAdded}
+          savedRecipes={savedRecipes}
         />
       )}
 
