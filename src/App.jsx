@@ -1390,9 +1390,15 @@ export default function App() {
 
   async function handleSaveAndClear() {
     if (savingList) return
+    // Limpiar la UI siempre, independientemente de si Supabase funciona
+    const allIngIds = shoppingList.flatMap((cat) => cat.items.map(({ ingredient }) => ingredient.id))
+    setDismissedIds((prev) => new Set([...prev, ...allIngIds]))
+    setCustomItems([])
+    setPurchasedIds(new Set())
+
+    // Intentar guardar en historial (opcional, no bloquea el vaciado)
     setSavingList(true)
     try {
-      const allIngIds = shoppingList.flatMap((cat) => cat.items.map(({ ingredient }) => ingredient.id))
       const allCatItems = [
         ...shoppingList.map((cat) => ({
           category: cat.category,
@@ -1406,14 +1412,11 @@ export default function App() {
           saved_at: new Date().toISOString(),
           items: allCatItems,
         })
+        if (historyOpen) loadShoppingHistory()
       }
-      setDismissedIds((prev) => new Set([...prev, ...allIngIds]))
-      setCustomItems([])
-      setPurchasedIds(new Set())
-      showToast('Lista guardada y vaciada ✓')
-      if (historyOpen) loadShoppingHistory()
+      showToast('Lista vaciada ✓')
     } catch (e) {
-      showToast('Error al guardar lista: ' + e.message)
+      showToast('Lista vaciada (historial no guardado)')
     } finally {
       setSavingList(false)
     }
