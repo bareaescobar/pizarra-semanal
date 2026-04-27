@@ -13,7 +13,7 @@
 }
 
 :root {
-  --bg: #f0f4ff;
+  --bg: #f5f6fa;
   --surface: #ffffff;
   --surface2: #f8fafc;
   --surface3: #f1f5f9;
@@ -219,10 +219,9 @@ html, body {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 6px 6px 7px;
+  padding: 7px 6px 8px;
   text-align: center;
   box-shadow: var(--shadow-sm);
-  overflow: hidden;
 }
 
 .board-day-header .day-name {
@@ -270,7 +269,7 @@ html, body {
   background: var(--surface);
   border: 1.5px solid var(--border-soft);
   border-radius: var(--radius);
-  min-height: 90px;
+  min-height: 130px;
   padding: 6px;
   display: flex;
   flex-direction: column;
@@ -1306,7 +1305,7 @@ html, body {
   }
 
   .board-cell {
-    min-height: 68px;
+    min-height: 100px;
     padding: 4px;
   }
 
@@ -1591,4 +1590,148 @@ html, body {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--accent);
+}
+
+/* ─── Autocomplete ─── */
+.autocomplete-wrap { position: relative; }
+
+.autocomplete-list {
+  position: absolute;
+  z-index: 200;
+  top: calc(100% + 2px);
+  left: 0; right: 0;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.autocomplete-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border-soft);
+  font-family: 'Milk Choco', 'Caveat', cursive;
+  font-size: 15px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.autocomplete-item:last-child { border-bottom: none; }
+.autocomplete-item:hover { background: var(--accent-light); }
+
+/* ─── Tray tabs ─── */
+.tray-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.tray-tab {
+  background: none;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 3px 13px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: all 0.15s;
+  font-family: 'Nunito', system-ui, sans-serif;
+}
+.tray-tab.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.tray-tab-count {
+  display: inline-block;
+  background: rgba(255,255,255,0.3);
+  border-radius: var(--radius-pill);
+  padding: 0 5px;
+  font-size: 10px;
+  margin-left: 3px;
+}
+
+.tray-add-btn {
+  margin-left: auto;
+  width: auto !important;
+  padding: 3px 10px !important;
+  font-size: 11px !important;
+}
+
+.tray-tab-content {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ─── Tray move zone (drag-to-pool target) ─── */
+.tray-move-zone {
+  width: 100%;
+  padding: 10px;
+  margin-bottom: 10px;
+  background: var(--accent-light);
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: center;
+  animation: tray-pulse 1.4s ease-in-out infinite;
+}
+@keyframes tray-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.6 } }
+
+/* ─── Recipe chips ─── */
+.recipe-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  padding: 5px 6px 5px 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  max-width: 160px;
+}
+.recipe-chip:hover { border-color: var(--accent); box-shadow: var(--shadow-sm); }
+
+.recipe-chip-name {
+  font-family: 'Milk Choco', 'Caveat', cursive;
+  font-size: 14px;
+  color: var(--text);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recipe-chip-del {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 2px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+.recipe-chip-del:hover { color: var(--red); }
+
+.tray-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 6px 2px;
+  font-style: italic;
 }
