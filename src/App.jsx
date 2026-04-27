@@ -24,6 +24,7 @@ import {
   ChefHat,
   Palette,
   GripVertical,
+  RotateCcw,
 } from 'lucide-react'
 import supabase, { dbGet, dbInsert, dbUpdate, dbDelete } from './supabase.js'
 import { INGREDIENT_CATEGORIES, DEFAULT_INGREDIENTS } from './ingredients.js'
@@ -982,6 +983,7 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [savingList, setSavingList] = useState(false)
   const [allSlots, setAllSlots] = useState([])
+  const [dismissedIds, setDismissedIdsRaw] = useState(new Set())
   const [contextMenu, setContextMenu] = useState(null)
   const [recipeModal, setRecipeModal] = useState(null)
   const [copyingSlot, setCopyingSlot] = useState(null)
@@ -1034,6 +1036,19 @@ export default function App() {
   const [pendingRecipeName, setPendingRecipeName] = useState(null)
 
   const initDone = useRef(false)
+
+  function setDismissedIds(val) {
+    const next = typeof val === 'function' ? val(dismissedIds) : val
+    setDismissedIdsRaw(next)
+    localStorage.setItem(`dismissed_${weekKey}`, JSON.stringify([...next]))
+  }
+
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(`dismissed_${weekKey}`) || '[]')
+      setDismissedIdsRaw(new Set(stored))
+    } catch { setDismissedIdsRaw(new Set()) }
+  }, [weekKey])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
@@ -1336,8 +1351,9 @@ export default function App() {
 
   const shoppingList = (() => {
     const ingredientMap = {}
-    for (const slot of allSlots) {
+    for (const slot of slots) {
       for (const ingId of slot.ingredient_ids || []) {
+        if (dismissedIds.has(ingId)) continue
         if (!ingredientMap[ingId]) ingredientMap[ingId] = []
         if (!ingredientMap[ingId].includes(slot.dish_name)) {
           ingredientMap[ingId].push(slot.dish_name)
@@ -1374,25 +1390,33 @@ export default function App() {
 
   async function handleSaveAndClear() {
     if (savingList) return
+    // Limpiar la UI siempre, independientemente de si Supabase funciona
+    const allIngIds = shoppingList.flatMap((cat) => cat.items.map(({ ingredient }) => ingredient.id))
+    setDismissedIds((prev) => new Set([...prev, ...allIngIds]))
+    setCustomItems([])
+    setPurchasedIds(new Set())
+
+    // Intentar guardar en historial (opcional, no bloquea el vaciado)
     setSavingList(true)
     try {
-      const itemsToSave = shoppingList.map((cat) => ({
-        category: cat.category,
-        items: cat.items.map(({ ingredient }) => ({
-          id: ingredient.id,
-          name: ingredient.name,
+      const allCatItems = [
+        ...shoppingList.map((cat) => ({
+          category: cat.category,
+          items: cat.items.map(({ ingredient }) => ({ id: ingredient.id, name: ingredient.name })),
         })),
-      }))
-      await dbInsert('v2_shopping_lists', {
-        week_key: weekKey,
-        saved_at: new Date().toISOString(),
-        items: itemsToSave,
-      })
-      setPurchasedIds(new Set())
-      showToast('Lista guardada en historial ✓')
-      if (historyOpen) loadShoppingHistory()
+        ...(customItems.length ? [{ category: 'Extra', items: customItems.map((i) => ({ id: i.id, name: i.name })) }] : []),
+      ]
+      if (allCatItems.length) {
+        await dbInsert('v2_shopping_lists', {
+          week_key: weekKey,
+          saved_at: new Date().toISOString(),
+          items: allCatItems,
+        })
+        if (historyOpen) loadShoppingHistory()
+      }
+      showToast('Lista vaciada ✓')
     } catch (e) {
-      showToast('Error al guardar lista: ' + e.message)
+      showToast('Lista vaciada (historial no guardado)')
     } finally {
       setSavingList(false)
     }
@@ -1578,6 +1602,11 @@ export default function App() {
                 {totalItems > 0 && <span className="sidebar-count">({totalItems})</span>}
               </h2>
               <div className="sidebar-actions">
+                {dismissedIds.size > 0 && (
+                  <button className="sidebar-icon-btn" title="Restaurar lista" onClick={() => setDismissedIds(new Set())}>
+                    <RotateCcw size={14} />
+                  </button>
+                )}
                 {purchasedIds.size > 0 && (
                   <button className="sidebar-icon-btn" title="Desmarcar todo" onClick={() => setPurchasedIds(new Set())}>
                     <X size={14} />
@@ -1646,10 +1675,10 @@ export default function App() {
                 <button
                   className="btn-clear-purchased"
                   onClick={handleSaveAndClear}
-                  disabled={savingList || purchasedIds.size === 0}
-                  style={{ opacity: purchasedIds.size === 0 ? 0.45 : 1, marginTop: 0 }}
+                  disabled={savingList || totalItems === 0}
+                  style={{ opacity: totalItems === 0 ? 0.45 : 1, marginTop: 0 }}
                 >
-                  {savingList ? 'Guardando…' : purchasedIds.size > 0 ? `Guardar y limpiar (${purchasedIds.size})` : 'Guardar y limpiar'}
+                  {savingList ? 'Guardando…' : 'Guardar y vaciar lista'}
                 </button>
               </div>
               <div className="custom-item-add">
