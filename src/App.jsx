@@ -1370,7 +1370,7 @@ export default function App() {
     return result
   })()
 
-  const totalItems = shoppingList.reduce((acc, cat) => acc + cat.items.length, 0)
+  const totalItems = shoppingList.reduce((acc, cat) => acc + cat.items.length, 0) + customItems.length
 
   const allItemIds = [
     ...shoppingList.flatMap((cat) => cat.items.map(({ ingredient }) => ingredient.id)),
@@ -1629,14 +1629,13 @@ export default function App() {
                   <span className="shopping-progress-label">{purchasedCount} de {totalCheckable}</span>
                 </div>
               )}
-              {shoppingList.length === 0 ? (
+              {shoppingList.length === 0 && customItems.length === 0 ? (
                 <p className="sidebar-empty">
-                  Añade platos al tablero para ver los ingredientes aquí.
+                  Añade platos al tablero o escribe artículos extra para ver la lista aquí.
                 </p>
               ) : (
                 <>
                   {(() => {
-                    // Merge custom items into their categories
                     const allCategories = [...new Set([
                       ...shoppingList.map((c) => c.category),
                       ...customItems.map((i) => i.category || 'Otros'),
