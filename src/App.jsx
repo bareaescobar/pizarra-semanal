@@ -25,6 +25,7 @@ import {
   Palette,
   GripVertical,
   RotateCcw,
+  Share2,
 } from 'lucide-react'
 import supabase, { dbGet, dbInsert, dbUpdate, dbDelete } from './supabase.js'
 import { INGREDIENT_CATEGORIES, DEFAULT_INGREDIENTS } from './ingredients.js'
@@ -761,28 +762,70 @@ function ShoppingHistoryModal({ history, onClose }) {
   )
 }
 
-// ─── RecipeChip ───────────────────────────────────────────────────────────────
+// ─── RecipePostit ─────────────────────────────────────────────────────────────
 
-function RecipeChip({ recipe, onSelect, onDelete }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: `recipe-${recipe.id}` })
-  const style = transform ? { transform: `translate(${transform.x}px, ${transform.y}px)`, opacity: isDragging ? 0.4 : 1 } : {}
+function RecipePostit({ item, onUpdate, onDelete, onSelect }) {
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({ id: `recipe-${item.id}` })
+  const [editing, setEditing] = useState(!item.name)
+  const [draft, setDraft] = useState(item.name)
+  const inputRef = useRef(null)
+
+  useEffect(() => { if (editing) inputRef.current?.focus() }, [editing])
+
+  const rotation = slotRotation(item.id)
+  const style = {
+    ...(transform ? { transform: CSS.Translate.toString(transform) } : {}),
+    '--base-rotate': `${rotation}deg`,
+    background: '#ddd6fe',
+    opacity: isDragging ? 0.4 : 1,
+  }
+
+  function commitEdit() {
+    const trimmed = draft.trim()
+    if (!trimmed) { onDelete(); return }
+    setEditing(false)
+    if (trimmed !== item.name) onUpdate({ ...item, name: trimmed })
+  }
+
   return (
-    <div
-      ref={setNodeRef}
-      {...attributes}
-      {...listeners}
-      className="recipe-chip"
-      style={style}
-      onClick={onSelect}
-    >
-      <span className="recipe-chip-name">{recipe.name}</span>
-      <button
-        className="recipe-chip-del"
-        onMouseDown={(e) => { e.stopPropagation() }}
-        onClick={(e) => { e.stopPropagation(); onDelete() }}
-      >
-        <X size={10} />
-      </button>
+    <div ref={setNodeRef} style={style} className="postit pool-postit">
+      <div className="postit-header">
+        {editing ? (
+          <input
+            ref={inputRef}
+            className="pool-name-input"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commitEdit}
+            onKeyDown={(e) => { if (e.key === 'Enter') commitEdit(); else if (e.key === 'Escape') onDelete() }}
+            onPointerDown={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <span
+            className="postit-name"
+            style={{ cursor: 'pointer' }}
+            onDoubleClick={() => setEditing(true)}
+            onClick={() => onSelect?.()}
+            title="Clic para usar · doble clic para editar"
+          >
+            {item.name || <em style={{ opacity: 0.5 }}>sin nombre</em>}
+          </span>
+        )}
+        <div className="postit-actions">
+          <button className="postit-btn" onPointerDown={(e) => e.stopPropagation()} onClick={() => setEditing(true)} title="Editar nombre">
+            <Pencil size={11} />
+          </button>
+          <button className="postit-btn delete" onPointerDown={(e) => e.stopPropagation()} onClick={onDelete}>
+            <Trash2 size={11} />
+          </button>
+        </div>
+      </div>
+      <div className="postit-footer">
+        <div />
+        <div ref={setActivatorNodeRef} {...listeners} {...attributes} className="drag-handle" title="Arrastrar al tablero">
+          <GripVertical size={12} />
+        </div>
+      </div>
     </div>
   )
 }
@@ -1422,6 +1465,25 @@ export default function App() {
     }
   }
 
+  function handleShareWhatsApp() {
+    if (totalItems === 0) return
+    let text = '🛒 Lista de la compra\n\n'
+    for (const cat of shoppingList) {
+      text += `*${cat.category}*\n`
+      for (const { ingredient } of cat.items) {
+        text += `• ${ingredient.name}\n`
+      }
+      text += '\n'
+    }
+    if (customItems.length) {
+      text += `*Extra*\n`
+      for (const item of customItems) {
+        text += `• ${item.name}\n`
+      }
+    }
+    window.open(`https://wa.me/?text=${encodeURIComponent(text.trim())}`, '_blank')
+  }
+
   async function loadShoppingHistory() {
     try {
       const { data, error } = await supabase
@@ -1612,6 +1674,11 @@ export default function App() {
                     <X size={14} />
                   </button>
                 )}
+                {totalItems > 0 && (
+                  <button className="sidebar-icon-btn" title="Compartir por WhatsApp" onClick={handleShareWhatsApp}>
+                    <Share2 size={15} />
+                  </button>
+                )}
                 <button className="sidebar-icon-btn" title="Historial de listas" onClick={handleOpenHistory}>
                   <History size={16} />
                 </button>
@@ -1730,10 +1797,7 @@ export default function App() {
             {trayTab === 'recipes' && (
               <button
                 className="btn-add-slot tray-add-btn"
-                onClick={() => {
-                  const name = prompt('Nombre de la receta:')
-                  if (name?.trim()) addToSavedRecipes(name.trim())
-                }}
+                onClick={() => setSavedRecipes((prev) => [...prev, { id: Date.now().toString(), name: '' }])}
               >
                 <Plus size={11} /> Receta
               </button>
@@ -1783,10 +1847,11 @@ export default function App() {
               )}
               <div className="dishes-tray-list">
                 {savedRecipes.map((recipe) => (
-                  <RecipeChip
+                  <RecipePostit
                     key={recipe.id}
-                    recipe={recipe}
-                    onSelect={() => { setPendingRecipeName(recipe.name); setTrayTab('pool') }}
+                    item={recipe}
+                    onSelect={() => { if (recipe.name) { setPendingRecipeName(recipe.name); setTrayTab('pool') } }}
+                    onUpdate={(updated) => setSavedRecipes((prev) => prev.map((r) => r.id === recipe.id ? updated : r))}
                     onDelete={() => setSavedRecipes((prev) => prev.filter((r) => r.id !== recipe.id))}
                   />
                 ))}
