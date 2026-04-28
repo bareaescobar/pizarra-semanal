@@ -184,22 +184,24 @@ html, body {
 
 .app-body {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   flex: 1;
   overflow: hidden;
 }
 
-/* Row containing board + sidebar */
-.app-top {
+/* Left column: board on top, tray on bottom */
+.app-main {
   display: flex;
-  flex: 0 0 60%;
-  min-height: 0;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
 }
 
 /* ─── Board ─── */
 .board-wrapper {
-  flex: 1;
+  flex: 0 0 60%;
+  min-height: 0;
   overflow: auto;
   padding: 16px 16px 10px;
 }
@@ -470,13 +472,14 @@ html, body {
 
 /* ─── Sidebar ─── */
 .sidebar {
-  width: 272px;
+  width: 280px;
   flex-shrink: 0;
   background: var(--surface);
   border-left: 2px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  height: 100%;
 }
 
 .sidebar-header {
@@ -1267,10 +1270,13 @@ html, body {
 }
 
 @media (max-width: 768px) {
-  .app-top { flex: 0 0 70%; }
+  .app-body { flex-direction: column; }
+  .app-main { flex: 1; }
+  .board-wrapper { flex: 0 0 60%; }
 
   .sidebar {
     display: none;
+    height: auto;
   }
 
   .sidebar.mobile-open {
@@ -1735,4 +1741,178 @@ html, body {
   color: var(--text-muted);
   padding: 6px 2px;
   font-style: italic;
+}
+
+/* ─── Logout button ─── */
+.logout-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.logout-btn:hover {
+  border-color: var(--red);
+  color: var(--red);
+  background: var(--red-light);
+}
+.logout-name {
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── Login screen ─── */
+.login-screen {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  padding: 20px;
+}
+.login-form {
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 36px 32px;
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: var(--shadow-lg);
+}
+.login-form h1 {
+  font-family: 'Milk Choco', 'Caveat', cursive;
+  font-size: 28px;
+  color: var(--text);
+  text-align: center;
+  margin-bottom: 2px;
+}
+.login-sub {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+  margin-top: -6px;
+}
+.login-form input {
+  background: var(--surface2);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  font-size: 14px;
+  color: var(--text);
+  outline: none;
+  font-family: inherit;
+  transition: border-color 0.15s;
+}
+.login-form input:focus { border-color: var(--accent); }
+.login-form button[type="submit"] {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-pill);
+  padding: 11px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s, transform 0.1s;
+  margin-top: 4px;
+}
+.login-form button[type="submit"]:hover:not(:disabled) {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+}
+.login-form button[type="submit"]:disabled { opacity: 0.5; cursor: not-allowed; }
+.login-error {
+  color: var(--red);
+  font-size: 12px;
+  text-align: center;
+  background: var(--red-light);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+}
+
+/* ─── History modal fix ─── */
+.history-entry-body {
+  padding: 8px 14px 14px;
+  border-top: 1px solid var(--border-soft);
+}
+.history-cat {
+  margin-bottom: 10px;
+}
+.history-cat:last-child { margin-bottom: 0; }
+.history-cat-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  margin-bottom: 4px;
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.history-cat-item {
+  font-family: 'Milk Choco', 'Caveat', cursive;
+  font-size: 14px;
+  color: var(--text);
+  padding: 2px 0 2px 8px;
+  line-height: 1.4;
+}
+
+/* ─── AI proposals modal ─── */
+.proposal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.proposal-item {
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  background: var(--surface2);
+  transition: border-color 0.15s;
+}
+.proposal-item:hover { border-color: var(--accent); }
+.proposal-name {
+  font-family: 'Milk Choco', 'Caveat', cursive;
+  font-size: 17px;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.proposal-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+.proposal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* ─── Tray AI button ─── */
+.tray-ai-btn {
+  background: var(--accent-light) !important;
+  border-color: var(--accent) !important;
+  color: var(--accent-hover) !important;
+  border-style: solid !important;
+}
+.tray-ai-btn:hover {
+  background: var(--accent) !important;
+  color: #fff !important;
 }

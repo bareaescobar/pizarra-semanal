@@ -26,6 +26,8 @@ import {
   GripVertical,
   RotateCcw,
   Share2,
+  LogOut,
+  Lightbulb,
 } from 'lucide-react'
 import supabase, { dbGet, dbInsert, dbUpdate, dbDelete } from './supabase.js'
 import { INGREDIENT_CATEGORIES, DEFAULT_INGREDIENTS } from './ingredients.js'
@@ -95,6 +97,18 @@ const DISH_KEYWORDS = {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+function titleCase(str) {
+  if (!str) return ''
+  return String(str)
+    .toLocaleLowerCase('es')
+    .replace(/(^|\s|[-/])([\p{L}])/gu, (_, sep, ch) => sep + ch.toLocaleUpperCase('es'))
+}
 
 // startDayOfWeek: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
 function getWeekKey(offset = 0, startDayOfWeek = 0) {
@@ -330,7 +344,7 @@ function PostitContent({ slot, onEdit, onDelete, dragHandleRef, dragListeners, d
   return (
     <>
       <div className="postit-header">
-        <span className="postit-name">{slot.dish_name}</span>
+        <span className="postit-name">{titleCase(slot.dish_name)}</span>
         <div className="postit-actions">
           <button
             className="postit-btn"
@@ -808,7 +822,7 @@ function RecipePostit({ item, onUpdate, onDelete, onSelect }) {
             onClick={() => onSelect?.()}
             title="Clic para usar · doble clic para editar"
           >
-            {item.name || <em style={{ opacity: 0.5 }}>sin nombre</em>}
+            {item.name ? titleCase(item.name) : <em style={{ opacity: 0.5 }}>sin nombre</em>}
           </span>
         )}
         <div className="postit-actions">
@@ -879,7 +893,7 @@ function PoolPostit({ item, ingredients, onUpdate, onDelete, onContextMenu }) {
           />
         ) : (
           <span className="postit-name" onDoubleClick={() => setEditing(true)} title="Doble clic para editar">
-            {item.dish_name || <em style={{ opacity: 0.5 }}>sin nombre</em>}
+            {item.dish_name ? titleCase(item.dish_name) : <em style={{ opacity: 0.5 }}>sin nombre</em>}
           </span>
         )}
         <div className="postit-actions">
@@ -1004,9 +1018,283 @@ function RecipeModal({ slot, onClose }) {
   )
 }
 
+// ─── LoginScreen ─────────────────────────────────────────────────────────────
+
+function LoginScreen({ onLogin }) {
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    if (busy) return
+    setError(null)
+    setBusy(true)
+    try {
+      const hash = await sha256Hex(password)
+      const users = await dbGet('v2_users', { username: username.trim().toLowerCase() })
+      if (users.length && users[0].password_hash === hash) {
+        onLogin({ id: users[0].id, username: users[0].username })
+      } else {
+        setError('Usuario o contraseña incorrectos')
+      }
+    } catch (err) {
+      setError('Error: ' + err.message + ' (¿ejecutaste supabase-migration.sql?)')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="login-screen">
+      <form className="login-form" onSubmit={handleSubmit}>
+        <h1>🗒️ Pizarra Semanal</h1>
+        <p className="login-sub">Inicia sesión para gestionar tu pizarra</p>
+        <input
+          type="text"
+          placeholder="Usuario"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          autoFocus
+          autoComplete="username"
+          required
+        />
+        <input
+          type="password"
+          placeholder="Contraseña"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          autoComplete="current-password"
+          required
+        />
+        {error && <div className="login-error">{error}</div>}
+        <button type="submit" disabled={busy || !username.trim() || !password}>
+          {busy ? 'Comprobando…' : 'Entrar'}
+        </button>
+      </form>
+    </div>
+  )
+}
+
+// ─── AIRecipeProposalsModal ──────────────────────────────────────────────────
+
+async function callGeminiProposals(prefs, history) {
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY
+  if (!apiKey) throw new Error('VITE_GEMINI_API_KEY no configurada')
+  const histStr = history.length ? history.slice(0, 30).join(', ') : 'ninguna'
+  const prompt = `Eres un asistente de cocina española. Sugiere 5 ideas de platos sencillos basándote en estas preferencias:
+- Tipo de comida: ${prefs.mealType || 'cualquiera'}
+- Tiempo máximo: ${prefs.maxTime || 'sin límite'}
+- Ingrediente principal o restricción: ${prefs.mainOrAvoid || 'sin restricción'}
+- Otras notas: ${prefs.notes || 'ninguna'}
+
+El usuario ya tiene en su historial: ${histStr}. Sugiere recetas DIFERENTES a las del historial cuando sea posible.
+
+Responde ÚNICAMENTE con este JSON (sin markdown):
+{"proposals":[{"name":"Nombre del plato","description":"Descripción muy breve en 1-2 frases"}]}`
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { response_mime_type: 'application/json' },
+      }),
+    }
+  )
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err?.error?.message || `Error ${res.status}`)
+  }
+  const data = await res.json()
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text
+  if (!text) throw new Error('Respuesta vacía')
+  const parsed = JSON.parse(text)
+  return Array.isArray(parsed.proposals) ? parsed.proposals : []
+}
+
+function AIRecipeProposalsModal({ savedRecipes, onClose, onAdd }) {
+  const [step, setStep] = useState('form') // 'form' | 'list'
+  const [prefs, setPrefs] = useState({ mealType: '', maxTime: '', mainOrAvoid: '', notes: '' })
+  const [proposals, setProposals] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [recipeView, setRecipeView] = useState(null) // { name, body, loading }
+
+  async function handleGenerate() {
+    setLoading(true)
+    setError(null)
+    try {
+      const list = await callGeminiProposals(prefs, savedRecipes.map((r) => r.name))
+      setProposals(list)
+      setStep('list')
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function viewRecipe(name) {
+    setRecipeView({ name, body: null, loading: true, error: null })
+    try {
+      const body = await callGeminiRecipe(name)
+      setRecipeView({ name, body, loading: false, error: null })
+    } catch (e) {
+      setRecipeView({ name, body: null, loading: false, error: e.message })
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="modal-header">
+          <h3>💡 Propuestas IA</h3>
+          <button className="modal-close" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body">
+          {step === 'form' && (
+            <>
+              <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+                Cuéntanos qué te apetece y la IA propondrá 5 platos sencillos basados en tu historial.
+              </p>
+              <div className="form-field">
+                <label className="form-label">Tipo de comida</label>
+                <div className="effort-selector">
+                  {['Comida', 'Cena', 'Cualquiera'].map((t) => (
+                    <button
+                      key={t}
+                      className={`effort-btn${prefs.mealType === t ? ' selected-1' : ''}`}
+                      onClick={() => setPrefs((p) => ({ ...p, mealType: t }))}
+                      type="button"
+                    >{t}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="form-field">
+                <label className="form-label">Tiempo máximo</label>
+                <div className="effort-selector">
+                  {['15 min', '30 min', '1 h', 'Sin prisa'].map((t) => (
+                    <button
+                      key={t}
+                      className={`effort-btn${prefs.maxTime === t ? ' selected-2' : ''}`}
+                      onClick={() => setPrefs((p) => ({ ...p, maxTime: t }))}
+                      type="button"
+                    >{t}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="form-field">
+                <label className="form-label">Ingrediente principal o lo que evitar</label>
+                <input
+                  className="form-input"
+                  placeholder="Ej: pollo, sin gluten…"
+                  value={prefs.mainOrAvoid}
+                  onChange={(e) => setPrefs((p) => ({ ...p, mainOrAvoid: e.target.value }))}
+                />
+              </div>
+              <div className="form-field">
+                <label className="form-label">Otras notas</label>
+                <input
+                  className="form-input"
+                  placeholder="Ej: ligero, casero…"
+                  value={prefs.notes}
+                  onChange={(e) => setPrefs((p) => ({ ...p, notes: e.target.value }))}
+                />
+              </div>
+              {error && <div style={{ color: '#dc2626', fontSize: 12 }}>{error}</div>}
+            </>
+          )}
+
+          {step === 'list' && (
+            <>
+              {loading ? (
+                <div className="ai-loading"><div className="spinner" />Consultando IA…</div>
+              ) : proposals.length === 0 ? (
+                <p>Sin propuestas. Vuelve al formulario.</p>
+              ) : (
+                <div className="proposal-list">
+                  {proposals.map((p, i) => (
+                    <div key={i} className="proposal-item">
+                      <div className="proposal-name">{titleCase(p.name)}</div>
+                      <div className="proposal-desc">{p.description}</div>
+                      <div className="proposal-actions">
+                        <button className="btn btn-ghost" type="button" onClick={() => viewRecipe(p.name)}>
+                          Ver receta
+                        </button>
+                        <button className="btn btn-primary" type="button" onClick={() => onAdd(p.name)}>
+                          <Plus size={12} /> Añadir
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {error && <div style={{ color: '#dc2626', fontSize: 12 }}>{error}</div>}
+            </>
+          )}
+        </div>
+        <div className="modal-footer">
+          {step === 'list' && !loading && (
+            <button className="btn btn-ghost" onClick={() => setStep('form')}>Volver</button>
+          )}
+          {step === 'form' && (
+            <button className="btn btn-primary" onClick={handleGenerate} disabled={loading}>
+              {loading ? 'Generando…' : 'Generar propuestas'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {recipeView && (
+        <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && setRecipeView(null)} style={{ zIndex: 250 }}>
+          <div className="modal">
+            <div className="modal-header">
+              <h3>🍳 {titleCase(recipeView.name)}</h3>
+              <button className="modal-close" onClick={() => setRecipeView(null)}><X size={18} /></button>
+            </div>
+            <div className="modal-body">
+              {recipeView.loading ? (
+                <div className="ai-loading"><div className="spinner" />Cargando receta…</div>
+              ) : recipeView.error ? (
+                <p style={{ color: 'var(--red)', fontSize: 13 }}>{recipeView.error}</p>
+              ) : (
+                <div className="recipe-content">
+                  {recipeView.body.split('\n').filter(Boolean).map((line, i) => (
+                    <p key={i} style={{ marginBottom: 8, lineHeight: 1.6 }}>{line}</p>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-ghost" onClick={() => setRecipeView(null)}>Cerrar</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 export default function App() {
+  const [currentUser, setCurrentUser] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('currentUser') || 'null') } catch { return null }
+  })
+
+  function handleLogin(user) {
+    localStorage.setItem('currentUser', JSON.stringify(user))
+    setCurrentUser(user)
+  }
+  function handleLogout() {
+    localStorage.removeItem('currentUser')
+    setCurrentUser(null)
+  }
+
   const [weekOffset, setWeekOffset] = useState(0)
   const [startDayOfWeek, setStartDayOfWeekRaw] = useState(() => parseInt(localStorage.getItem('startDayOfWeek') || '0'))
   const setStartDayOfWeek = (val) => { setStartDayOfWeekRaw(val); localStorage.setItem('startDayOfWeek', val) }
@@ -1026,53 +1314,109 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [savingList, setSavingList] = useState(false)
   const [allSlots, setAllSlots] = useState([])
-  const [dismissedIds, setDismissedIdsRaw] = useState(new Set())
+  const [dismissedIds, setDismissedIds] = useState(new Set())
   const [contextMenu, setContextMenu] = useState(null)
   const [recipeModal, setRecipeModal] = useState(null)
   const [copyingSlot, setCopyingSlot] = useState(null)
   const [movingSlot, setMovingSlot] = useState(null)
-  const [colorOverrides, setColorOverridesRaw] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('colorOverrides') || '{}') } catch { return {} }
-  })
-  const [customItems, setCustomItemsRaw] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('customItems') || '[]') } catch { return [] }
-  })
+  const [colorOverrides, setColorOverrides] = useState({})
+  const [customItems, setCustomItems] = useState([])
   const [customInput, setCustomInput] = useState('')
-  const [poolItems, setPoolItemsRaw] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('dishPool') || '[]') } catch { return [] }
-  })
-  const setPoolItems = (val) => {
-    const next = typeof val === 'function' ? val(poolItems) : val
-    setPoolItemsRaw(next)
-    localStorage.setItem('dishPool', JSON.stringify(next))
+  const [poolItems, setPoolItems] = useState([])
+  const [savedRecipes, setSavedRecipes] = useState([])
+  const [aiProposalsOpen, setAiProposalsOpen] = useState(false)
+
+  // ─── DB-backed mutations (writes broadcast via Supabase realtime) ──────────
+  async function reloadPool() {
+    try { setPoolItems(await dbGet('v2_pool_items')) } catch {}
+  }
+  async function addPoolItem(item) {
+    const row = { id: Date.now().toString(), dish_name: '', effort: 1, ...item }
+    setPoolItems((prev) => [...prev, row])
+    try { await dbInsert('v2_pool_items', row) } catch { reloadPool() }
+  }
+  async function updatePoolItem(id, patch) {
+    setPoolItems((prev) => prev.map((p) => p.id === id ? { ...p, ...patch } : p))
+    try { await dbUpdate('v2_pool_items', id, { ...patch, updated_at: new Date().toISOString() }) } catch { reloadPool() }
+  }
+  async function deletePoolItem(id) {
+    setPoolItems((prev) => prev.filter((p) => p.id !== id))
+    try { await dbDelete('v2_pool_items', id) } catch { reloadPool() }
   }
 
-  const setColorOverrides = (val) => {
-    const next = typeof val === 'function' ? val(colorOverrides) : val
-    setColorOverridesRaw(next)
-    localStorage.setItem('colorOverrides', JSON.stringify(next))
+  async function reloadRecipes() {
+    try { setSavedRecipes(await dbGet('v2_saved_recipes')) } catch {}
   }
-  const setCustomItems = (val) => {
-    const next = typeof val === 'function' ? val(customItems) : val
-    setCustomItemsRaw(next)
-    localStorage.setItem('customItems', JSON.stringify(next))
+  async function addRecipe(name = '') {
+    const row = { id: Date.now().toString(), name }
+    setSavedRecipes((prev) => [...prev, row])
+    try { await dbInsert('v2_saved_recipes', row) } catch { reloadRecipes() }
+  }
+  async function updateRecipe(id, patch) {
+    setSavedRecipes((prev) => prev.map((r) => r.id === id ? { ...r, ...patch } : r))
+    try { await dbUpdate('v2_saved_recipes', id, { ...patch, updated_at: new Date().toISOString() }) } catch { reloadRecipes() }
+  }
+  async function deleteRecipe(id) {
+    setSavedRecipes((prev) => prev.filter((r) => r.id !== id))
+    try { await dbDelete('v2_saved_recipes', id) } catch { reloadRecipes() }
+  }
+  async function addToSavedRecipes(name) {
+    const trimmed = (name || '').trim()
+    if (!trimmed) return
+    if (savedRecipes.some((r) => r.name.toLowerCase() === trimmed.toLowerCase())) return
+    await addRecipe(trimmed)
   }
 
-  const [savedRecipes, setSavedRecipesRaw] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('savedRecipes') || '[]') } catch { return [] }
-  })
-  const setSavedRecipes = (val) => {
-    const next = typeof val === 'function' ? val(savedRecipes) : val
-    setSavedRecipesRaw(next)
-    localStorage.setItem('savedRecipes', JSON.stringify(next))
+  async function reloadCustomItems() {
+    try { setCustomItems(await dbGet('v2_custom_items', { week_key: weekKey })) } catch {}
   }
-  function addToSavedRecipes(name) {
-    if (!name.trim()) return
-    setSavedRecipes((prev) =>
-      prev.some((r) => r.name.toLowerCase() === name.trim().toLowerCase())
-        ? prev
-        : [...prev, { id: Date.now().toString(), name: name.trim() }]
-    )
+  async function addCustomItemRow(item) {
+    const row = { id: Date.now().toString(), week_key: weekKey, ...item }
+    setCustomItems((prev) => [...prev, row])
+    try { await dbInsert('v2_custom_items', row) } catch { reloadCustomItems() }
+  }
+  async function removeCustomItemRow(id) {
+    setCustomItems((prev) => prev.filter((i) => i.id !== id))
+    try { await dbDelete('v2_custom_items', id) } catch { reloadCustomItems() }
+  }
+  async function clearCustomItemsThisWeek() {
+    const ids = customItems.map((i) => i.id)
+    setCustomItems([])
+    try {
+      await supabase.from('v2_custom_items').delete().eq('week_key', weekKey)
+    } catch { reloadCustomItems() }
+  }
+
+  async function reloadDismissed() {
+    try {
+      const rows = await dbGet('v2_dismissed', { week_key: weekKey })
+      setDismissedIds(new Set(rows.map((r) => r.ingredient_id)))
+    } catch {}
+  }
+  async function addDismissed(ingredientIds) {
+    if (!ingredientIds.length) return
+    setDismissedIds((prev) => new Set([...prev, ...ingredientIds]))
+    try {
+      const rows = ingredientIds.map((id) => ({ week_key: weekKey, ingredient_id: String(id) }))
+      await supabase.from('v2_dismissed').upsert(rows, { onConflict: 'week_key,ingredient_id' })
+    } catch { reloadDismissed() }
+  }
+  async function clearDismissed() {
+    setDismissedIds(new Set())
+    try { await supabase.from('v2_dismissed').delete().eq('week_key', weekKey) } catch { reloadDismissed() }
+  }
+
+  async function reloadColorOverrides() {
+    try {
+      const rows = await dbGet('v2_color_overrides')
+      setColorOverrides(Object.fromEntries(rows.map((r) => [r.slot_id, r.type_key])))
+    } catch {}
+  }
+  async function setColorOverride(slotId, typeKey) {
+    setColorOverrides((prev) => ({ ...prev, [String(slotId)]: typeKey }))
+    try {
+      await supabase.from('v2_color_overrides').upsert({ slot_id: String(slotId), type_key: typeKey }, { onConflict: 'slot_id' })
+    } catch { reloadColorOverrides() }
   }
 
   const [trayTab, setTrayTab] = useState('pool')
@@ -1080,32 +1424,53 @@ export default function App() {
 
   const initDone = useRef(false)
 
-  function setDismissedIds(val) {
-    const next = typeof val === 'function' ? val(dismissedIds) : val
-    setDismissedIdsRaw(next)
-    localStorage.setItem(`dismissed_${weekKey}`, JSON.stringify([...next]))
-  }
-
-  useEffect(() => {
-    try {
-      const stored = JSON.parse(localStorage.getItem(`dismissed_${weekKey}`) || '[]')
-      setDismissedIdsRaw(new Set(stored))
-    } catch { setDismissedIdsRaw(new Set()) }
-  }, [weekKey])
-
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   )
 
   useEffect(() => {
+    if (!currentUser) return
     if (initDone.current) return
     initDone.current = true
     initApp()
-  }, [])
+  }, [currentUser])
 
   useEffect(() => {
     if (ingredients.length > 0) loadSlots()
   }, [weekKey, ingredients])
+
+  // Global realtime subscriptions (independent of week)
+  useEffect(() => {
+    if (!currentUser) return
+    reloadPool()
+    reloadRecipes()
+    reloadColorOverrides()
+    const channels = [
+      supabase.channel('rt:pool').on('postgres_changes', { event: '*', schema: 'public', table: 'v2_pool_items' }, reloadPool).subscribe(),
+      supabase.channel('rt:recipes').on('postgres_changes', { event: '*', schema: 'public', table: 'v2_saved_recipes' }, reloadRecipes).subscribe(),
+      supabase.channel('rt:color').on('postgres_changes', { event: '*', schema: 'public', table: 'v2_color_overrides' }, reloadColorOverrides).subscribe(),
+      supabase.channel('rt:slots').on('postgres_changes', { event: '*', schema: 'public', table: 'v2_board_slots' }, () => { if (ingredients.length) loadSlots() }).subscribe(),
+      supabase.channel('rt:ingredients').on('postgres_changes', { event: '*', schema: 'public', table: 'v2_ingredients' }, async () => {
+        try { setIngredients(await dbGet('v2_ingredients')) } catch {}
+      }).subscribe(),
+      supabase.channel('rt:lists').on('postgres_changes', { event: '*', schema: 'public', table: 'v2_shopping_lists' }, () => { if (historyOpen) loadShoppingHistory() }).subscribe(),
+    ]
+    return () => channels.forEach((ch) => supabase.removeChannel(ch))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser])
+
+  // Per-week realtime subscriptions
+  useEffect(() => {
+    if (!currentUser) return
+    reloadCustomItems()
+    reloadDismissed()
+    const channels = [
+      supabase.channel(`rt:custom:${weekKey}`).on('postgres_changes', { event: '*', schema: 'public', table: 'v2_custom_items', filter: `week_key=eq.${weekKey}` }, reloadCustomItems).subscribe(),
+      supabase.channel(`rt:dismissed:${weekKey}`).on('postgres_changes', { event: '*', schema: 'public', table: 'v2_dismissed', filter: `week_key=eq.${weekKey}` }, reloadDismissed).subscribe(),
+    ]
+    return () => channels.forEach((ch) => supabase.removeChannel(ch))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser, weekKey])
 
   async function initApp() {
     try {
@@ -1296,7 +1661,7 @@ export default function App() {
     try {
       if (movingSlot.isPool) {
         await handleSaveDish({ dishName: movingSlot.dish_name, effort: 1, selectedIds: [], dayIdx, slotKey })
-        setPoolItems((prev) => prev.filter((p) => p.id !== movingSlot.id))
+        deletePoolItem(movingSlot.id)
       } else {
         await dbUpdate('v2_board_slots', movingSlot.id, {
           day_idx: dayIdx,
@@ -1315,15 +1680,15 @@ export default function App() {
   }
 
   function handleChangeType(slotId, typeKey) {
-    setColorOverrides((prev) => ({ ...prev, [slotId]: typeKey }))
+    setColorOverride(slotId, typeKey)
   }
 
   function addCustomItem(name) {
     const category = guessCategoryForItem(name, ingredients)
-    setCustomItems((prev) => [...prev, { id: Date.now().toString(), name, category }])
+    addCustomItemRow({ name, category })
   }
   function removeCustomItem(id) {
-    setCustomItems((prev) => prev.filter((i) => i.id !== id))
+    removeCustomItemRow(id)
   }
   function toggleCustomItem(id) {
     setPurchasedIds((prev) => {
@@ -1433,13 +1798,13 @@ export default function App() {
 
   async function handleSaveAndClear() {
     if (savingList) return
-    // Limpiar la UI siempre, independientemente de si Supabase funciona
     const allIngIds = shoppingList.flatMap((cat) => cat.items.map(({ ingredient }) => ingredient.id))
-    setDismissedIds((prev) => new Set([...prev, ...allIngIds]))
-    setCustomItems([])
+    // Clear UI optimistically first
+    const snapshotCustom = [...customItems]
+    await addDismissed(allIngIds)
+    clearCustomItemsThisWeek()
     setPurchasedIds(new Set())
 
-    // Intentar guardar en historial (opcional, no bloquea el vaciado)
     setSavingList(true)
     try {
       const allCatItems = [
@@ -1447,7 +1812,7 @@ export default function App() {
           category: cat.category,
           items: cat.items.map(({ ingredient }) => ({ id: ingredient.id, name: ingredient.name })),
         })),
-        ...(customItems.length ? [{ category: 'Extra', items: customItems.map((i) => ({ id: i.id, name: i.name })) }] : []),
+        ...(snapshotCustom.length ? [{ category: 'Extra', items: snapshotCustom.map((i) => ({ id: i.id, name: i.name })) }] : []),
       ]
       if (allCatItems.length) {
         await dbInsert('v2_shopping_lists', {
@@ -1506,6 +1871,8 @@ export default function App() {
   const activeSlot = activeId ? slots.find((s) => s.id === activeId) : null
   const dietWarnings = useMemo(() => getDietWarnings(slots, ingredients, colorOverrides, startDayOfWeek), [slots, ingredients, colorOverrides, startDayOfWeek])
 
+  if (!currentUser) return <LoginScreen onLogin={handleLogin} />
+
   if (loading) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', flexDirection: 'column', gap: 16, color: 'var(--text-muted)' }}>
@@ -1546,11 +1913,15 @@ export default function App() {
             </button>
           ))}
         </div>
+        <button className="logout-btn" onClick={handleLogout} title={`Cerrar sesión (${currentUser.username})`}>
+          <LogOut size={14} />
+          <span className="logout-name">{currentUser.username}</span>
+        </button>
       </header>
 
       <div className="app-body">
         <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-        <div className="app-top">
+        <div className="app-main">
         <div className="board-wrapper">
           {(copyingSlot || movingSlot) && (
             <div className="copy-banner">
@@ -1642,186 +2013,57 @@ export default function App() {
                 }
                 if (String(activeId).startsWith('recipe-')) {
                   const r = savedRecipes.find((x) => `recipe-${x.id}` === activeId)
-                  return r ? <div className="postit-overlay"><span className="postit-name">{r.name}</span></div> : null
+                  return r ? <div className="postit-overlay"><span className="postit-name">{titleCase(r.name)}</span></div> : null
                 }
                 const s = slots.find((x) => x.id === activeId)
                 if (!s) return null
                 const cat = colorOverrides[s.id] || getDominantCategory(s.ingredient_ids, ingredients, s.dish_name)
                 const bg = cat ? (CATEGORY_PASTELS[cat] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
-                return <div className="postit-overlay" style={{ background: bg }}><span className="postit-name">{s.dish_name}</span></div>
+                return <div className="postit-overlay" style={{ background: bg }}><span className="postit-name">{titleCase(s.dish_name)}</span></div>
               })()}
             </DragOverlay>
         </div>{/* /board-wrapper */}
-        <>
-          {shoppingOpen && (
-            <div className="sidebar-overlay" onClick={() => setShoppingOpen(false)} />
-          )}
-          <aside className={`sidebar${shoppingOpen ? ' mobile-open' : ''}`}>
-            <div className="sidebar-header">
-              <h2>
-                <ShoppingCart size={16} />
-                Lista de la compra
-                {totalItems > 0 && <span className="sidebar-count">({totalItems})</span>}
-              </h2>
-              <div className="sidebar-actions">
-                {dismissedIds.size > 0 && (
-                  <button className="sidebar-icon-btn" title="Restaurar lista" onClick={() => setDismissedIds(new Set())}>
-                    <RotateCcw size={14} />
-                  </button>
-                )}
-                {purchasedIds.size > 0 && (
-                  <button className="sidebar-icon-btn" title="Desmarcar todo" onClick={() => setPurchasedIds(new Set())}>
-                    <X size={14} />
-                  </button>
-                )}
-                {totalItems > 0 && (
-                  <button className="sidebar-icon-btn" title="Compartir por WhatsApp" onClick={handleShareWhatsApp}>
-                    <Share2 size={15} />
-                  </button>
-                )}
-                <button className="sidebar-icon-btn" title="Historial de listas" onClick={handleOpenHistory}>
-                  <History size={16} />
-                </button>
-                <button className="sidebar-mobile-close modal-close" onClick={() => setShoppingOpen(false)}>
-                  <X size={18} />
-                </button>
-              </div>
-            </div>
-            <div className="sidebar-body">
-              {totalCheckable > 0 && (
-                <div className="shopping-progress">
-                  <div className="shopping-progress-bar">
-                    <div className="shopping-progress-fill" style={{ width: `${Math.round((purchasedCount / totalCheckable) * 100)}%` }} />
-                  </div>
-                  <span className="shopping-progress-label">{purchasedCount} de {totalCheckable}</span>
-                </div>
-              )}
-              {shoppingList.length === 0 && customItems.length === 0 ? (
-                <p className="sidebar-empty">
-                  Añade platos al tablero o escribe artículos extra para ver la lista aquí.
-                </p>
-              ) : (
-                <>
-                  {(() => {
-                    const allCategories = [...new Set([
-                      ...shoppingList.map((c) => c.category),
-                      ...customItems.map((i) => i.category || 'Otros'),
-                    ])]
-                    return allCategories.map((category) => {
-                      const regular = shoppingList.find((c) => c.category === category)?.items || []
-                      const custom = customItems.filter((i) => (i.category || 'Otros') === category)
-                      if (!regular.length && !custom.length) return null
-                      return (
-                        <div key={category} className="shopping-category">
-                          <div className="shopping-category-title" style={{ borderLeft: `3px solid ${CATEGORY_COLORS[category] ?? 'var(--accent)'}`, paddingLeft: 8 }}>{category}</div>
-                          {regular.map(({ ingredient, dishes }) => (
-                            <div key={ingredient.id} className={`shopping-item${purchasedIds.has(ingredient.id) ? ' purchased' : ''}`}>
-                              <input type="checkbox" checked={purchasedIds.has(ingredient.id)} onChange={() => togglePurchased(ingredient.id)} />
-                              <span className="shopping-item-name"
-                                onMouseEnter={(e) => setPopover({ ingredient, position: { x: e.clientX, y: e.clientY } })}
-                                onMouseLeave={() => setPopover(null)}
-                              >{ingredient.name}</span>
-                              <span className="shopping-item-dishes">{dishes.length}</span>
-                            </div>
-                          ))}
-                          {custom.map((item) => (
-                            <div key={item.id} className={`shopping-item${purchasedIds.has('custom_' + item.id) ? ' purchased' : ''}`}>
-                              <input type="checkbox" checked={purchasedIds.has('custom_' + item.id)} onChange={() => toggleCustomItem(item.id)} />
-                              <span className="shopping-item-name">{item.name}</span>
-                              <button className="postit-btn delete" style={{ opacity: 0.5, flexShrink: 0 }} onPointerDown={(e) => e.stopPropagation()} onClick={() => removeCustomItem(item.id)}><X size={10} /></button>
-                            </div>
-                          ))}
-                        </div>
-                      )
-                    })
-                  })()}
-                </>
-              )}
-              <div className="shopping-footer-sticky">
-                <button
-                  className="btn-clear-purchased"
-                  onClick={handleSaveAndClear}
-                  disabled={savingList || totalItems === 0}
-                  style={{ opacity: totalItems === 0 ? 0.45 : 1, marginTop: 0 }}
-                >
-                  {savingList ? 'Guardando…' : 'Guardar y vaciar lista'}
-                </button>
-              </div>
-              <div className="custom-item-add">
-                <input
-                  type="text"
-                  className="custom-item-input"
-                  placeholder="Añadir artículo extra…"
-                  value={customInput}
-                  onChange={(e) => setCustomInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && customInput.trim()) {
-                      addCustomItem(customInput.trim())
-                      setCustomInput('')
-                    }
-                  }}
-                />
-                <button
-                  className="custom-item-btn"
-                  disabled={!customInput.trim()}
-                  onClick={() => { addCustomItem(customInput.trim()); setCustomInput('') }}
-                ><Plus size={13} /></button>
-              </div>
-            </div>
-          </aside>
-        </>
-        </div>{/* /app-top */}
 
         <div className="dishes-tray">
           <div className="tray-tabs">
-            <button
-              className={`tray-tab${trayTab === 'pool' ? ' active' : ''}`}
-              onClick={() => setTrayTab('pool')}
-            >
+            <button className={`tray-tab${trayTab === 'pool' ? ' active' : ''}`} onClick={() => setTrayTab('pool')}>
               Mi despensa
             </button>
-            <button
-              className={`tray-tab${trayTab === 'recipes' ? ' active' : ''}`}
-              onClick={() => setTrayTab('recipes')}
-            >
+            <button className={`tray-tab${trayTab === 'recipes' ? ' active' : ''}`} onClick={() => setTrayTab('recipes')}>
               Recetas{savedRecipes.length > 0 && <span className="tray-tab-count">{savedRecipes.length}</span>}
             </button>
             {trayTab === 'pool' && (
-              <button
-                className="btn-add-slot tray-add-btn"
-                onClick={() => setPoolItems((prev) => [...prev, { id: Date.now().toString(), dish_name: '', effort: 1 }])}
-              >
+              <button className="btn-add-slot tray-add-btn" onClick={() => addPoolItem()}>
                 <Plus size={11} /> Nuevo
               </button>
             )}
             {trayTab === 'recipes' && (
-              <button
-                className="btn-add-slot tray-add-btn"
-                onClick={() => setSavedRecipes((prev) => [...prev, { id: Date.now().toString(), name: '' }])}
-              >
-                <Plus size={11} /> Receta
-              </button>
+              <>
+                <button className="btn-add-slot tray-add-btn" onClick={() => addRecipe('')}>
+                  <Plus size={11} /> Receta
+                </button>
+                <button className="btn-add-slot tray-add-btn tray-ai-btn" onClick={() => setAiProposalsOpen(true)}>
+                  <Lightbulb size={11} /> IA
+                </button>
+              </>
             )}
           </div>
 
           {trayTab === 'pool' && (
             <div className="tray-tab-content">
               {movingSlot && !movingSlot.isPool && (
-                <button
-                  className="tray-move-zone"
-                  onClick={() => {
-                    setPoolItems((prev) => [...prev, { id: Date.now().toString(), dish_name: movingSlot.dish_name, effort: 1 }])
-                    handleDelete(movingSlot.id)
-                    setMovingSlot(null)
-                    showToast(`"${movingSlot.dish_name}" enviado a la despensa`)
-                  }}
-                >
+                <button className="tray-move-zone" onClick={() => {
+                  addPoolItem({ dish_name: movingSlot.dish_name })
+                  handleDelete(movingSlot.id)
+                  setMovingSlot(null)
+                  showToast(`"${titleCase(movingSlot.dish_name)}" enviado a la despensa`)
+                }}>
                   ⬇ Soltar aquí en la despensa
                 </button>
               )}
               {pendingRecipeName && (
                 <div className="copy-banner" style={{ marginBottom: 8 }}>
-                  <span>Añadiendo "{pendingRecipeName}" — haz clic en un hueco del tablero</span>
+                  <span>Añadiendo "{titleCase(pendingRecipeName)}" — haz clic en un hueco del tablero</span>
                   <button onClick={() => setPendingRecipeName(null)}><X size={13} /></button>
                 </div>
               )}
@@ -1831,8 +2073,8 @@ export default function App() {
                     key={item.id}
                     item={item}
                     ingredients={ingredients}
-                    onUpdate={(updated) => setPoolItems((prev) => prev.map((p) => p.id === item.id ? updated : p))}
-                    onDelete={() => setPoolItems((prev) => prev.filter((p) => p.id !== item.id))}
+                    onUpdate={(updated) => updatePoolItem(item.id, { dish_name: updated.dish_name })}
+                    onDelete={() => deletePoolItem(item.id)}
                     onContextMenu={(e, slot) => setContextMenu({ x: e.clientX, y: e.clientY, slot, isPool: true })}
                   />
                 ))}
@@ -1851,14 +2093,132 @@ export default function App() {
                     key={recipe.id}
                     item={recipe}
                     onSelect={() => { if (recipe.name) { setPendingRecipeName(recipe.name); setTrayTab('pool') } }}
-                    onUpdate={(updated) => setSavedRecipes((prev) => prev.map((r) => r.id === recipe.id ? updated : r))}
-                    onDelete={() => setSavedRecipes((prev) => prev.filter((r) => r.id !== recipe.id))}
+                    onUpdate={(updated) => updateRecipe(recipe.id, { name: updated.name })}
+                    onDelete={() => deleteRecipe(recipe.id)}
                   />
                 ))}
               </div>
             </div>
           )}
         </div>
+        </div>{/* /app-main */}
+
+        {shoppingOpen && (
+          <div className="sidebar-overlay" onClick={() => setShoppingOpen(false)} />
+        )}
+        <aside className={`sidebar${shoppingOpen ? ' mobile-open' : ''}`}>
+          <div className="sidebar-header">
+            <h2>
+              <ShoppingCart size={16} />
+              Lista de la compra
+              {totalItems > 0 && <span className="sidebar-count">({totalItems})</span>}
+            </h2>
+            <div className="sidebar-actions">
+              {dismissedIds.size > 0 && (
+                <button className="sidebar-icon-btn" title="Restaurar lista" onClick={clearDismissed}>
+                  <RotateCcw size={14} />
+                </button>
+              )}
+              {purchasedIds.size > 0 && (
+                <button className="sidebar-icon-btn" title="Desmarcar todo" onClick={() => setPurchasedIds(new Set())}>
+                  <X size={14} />
+                </button>
+              )}
+              {totalItems > 0 && (
+                <button className="sidebar-icon-btn" title="Compartir por WhatsApp" onClick={handleShareWhatsApp}>
+                  <Share2 size={15} />
+                </button>
+              )}
+              <button className="sidebar-icon-btn" title="Historial de listas" onClick={handleOpenHistory}>
+                <History size={16} />
+              </button>
+              <button className="sidebar-mobile-close modal-close" onClick={() => setShoppingOpen(false)}>
+                <X size={18} />
+              </button>
+            </div>
+          </div>
+          <div className="sidebar-body">
+            {totalCheckable > 0 && (
+              <div className="shopping-progress">
+                <div className="shopping-progress-bar">
+                  <div className="shopping-progress-fill" style={{ width: `${Math.round((purchasedCount / totalCheckable) * 100)}%` }} />
+                </div>
+                <span className="shopping-progress-label">{purchasedCount} de {totalCheckable}</span>
+              </div>
+            )}
+            {shoppingList.length === 0 && customItems.length === 0 ? (
+              <p className="sidebar-empty">
+                Añade platos al tablero o escribe artículos extra para ver la lista aquí.
+              </p>
+            ) : (
+              <>
+                {(() => {
+                  const allCategories = [...new Set([
+                    ...shoppingList.map((c) => c.category),
+                    ...customItems.map((i) => i.category || 'Otros'),
+                  ])]
+                  return allCategories.map((category) => {
+                    const regular = shoppingList.find((c) => c.category === category)?.items || []
+                    const custom = customItems.filter((i) => (i.category || 'Otros') === category)
+                    if (!regular.length && !custom.length) return null
+                    return (
+                      <div key={category} className="shopping-category">
+                        <div className="shopping-category-title" style={{ borderLeft: `3px solid ${CATEGORY_COLORS[category] ?? 'var(--accent)'}`, paddingLeft: 8 }}>{category}</div>
+                        {regular.map(({ ingredient, dishes }) => (
+                          <div key={ingredient.id} className={`shopping-item${purchasedIds.has(ingredient.id) ? ' purchased' : ''}`}>
+                            <input type="checkbox" checked={purchasedIds.has(ingredient.id)} onChange={() => togglePurchased(ingredient.id)} />
+                            <span className="shopping-item-name"
+                              onMouseEnter={(e) => setPopover({ ingredient, position: { x: e.clientX, y: e.clientY } })}
+                              onMouseLeave={() => setPopover(null)}
+                            >{titleCase(ingredient.name)}</span>
+                            <span className="shopping-item-dishes">{dishes.length}</span>
+                          </div>
+                        ))}
+                        {custom.map((item) => (
+                          <div key={item.id} className={`shopping-item${purchasedIds.has('custom_' + item.id) ? ' purchased' : ''}`}>
+                            <input type="checkbox" checked={purchasedIds.has('custom_' + item.id)} onChange={() => toggleCustomItem(item.id)} />
+                            <span className="shopping-item-name">{titleCase(item.name)}</span>
+                            <button className="postit-btn delete" style={{ opacity: 0.5, flexShrink: 0 }} onPointerDown={(e) => e.stopPropagation()} onClick={() => removeCustomItem(item.id)}><X size={10} /></button>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  })
+                })()}
+              </>
+            )}
+            <div className="shopping-footer-sticky">
+              <button
+                className="btn-clear-purchased"
+                onClick={handleSaveAndClear}
+                disabled={savingList || totalItems === 0}
+                style={{ opacity: totalItems === 0 ? 0.45 : 1, marginTop: 0 }}
+              >
+                {savingList ? 'Guardando…' : 'Guardar y vaciar lista'}
+              </button>
+            </div>
+            <div className="custom-item-add">
+              <input
+                type="text"
+                className="custom-item-input"
+                placeholder="Añadir artículo extra…"
+                value={customInput}
+                onChange={(e) => setCustomInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && customInput.trim()) {
+                    addCustomItem(customInput.trim())
+                    setCustomInput('')
+                  }
+                }}
+              />
+              <button
+                className="custom-item-btn"
+                disabled={!customInput.trim()}
+                onClick={() => { addCustomItem(customInput.trim()); setCustomInput('') }}
+              ><Plus size={13} /></button>
+            </div>
+          </div>
+        </aside>
         </DndContext>
       </div>{/* /app-body */}
 
@@ -1914,12 +2274,12 @@ export default function App() {
         <PostitContextMenu
           menu={contextMenu}
           onRecipe={(slot) => setRecipeModal(slot)}
-          onCopy={(slot) => { setCopyingSlot(slot); setMovingSlot(null); showToast(`Copiando "${slot.dish_name}" — elige dónde pegar`) }}
-          onMove={(slot) => { setMovingSlot(slot); setCopyingSlot(null); showToast(`Moviendo "${slot.dish_name}" — elige destino`) }}
+          onCopy={(slot) => { setCopyingSlot(slot); setMovingSlot(null); showToast(`Copiando "${titleCase(slot.dish_name)}" — elige dónde pegar`) }}
+          onMove={(slot) => { setMovingSlot(slot); setCopyingSlot(null); showToast(`Moviendo "${titleCase(slot.dish_name)}" — elige destino`) }}
           onSendToPool={(slot) => {
-            setPoolItems((prev) => [...prev, { id: Date.now().toString(), dish_name: slot.dish_name, effort: 1 }])
+            addPoolItem({ dish_name: slot.dish_name })
             handleDelete(slot.id)
-            showToast(`"${slot.dish_name}" movido a la despensa`)
+            showToast(`"${titleCase(slot.dish_name)}" movido a la despensa`)
           }}
           onChangeType={handleChangeType}
           onClose={() => setContextMenu(null)}
@@ -1928,6 +2288,14 @@ export default function App() {
 
       {recipeModal && (
         <RecipeModal slot={recipeModal} onClose={() => setRecipeModal(null)} />
+      )}
+
+      {aiProposalsOpen && (
+        <AIRecipeProposalsModal
+          savedRecipes={savedRecipes}
+          onClose={() => setAiProposalsOpen(false)}
+          onAdd={(name) => { addToSavedRecipes(name); showToast(`"${titleCase(name)}" añadida a recetas`) }}
+        />
       )}
 
       {toast && <div className="toast">{toast}</div>}
