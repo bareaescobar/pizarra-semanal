@@ -725,6 +725,7 @@ function ShoppingHistoryModal({ history, onClose }) {
           <button className="modal-close" onClick={onClose}><X size={18} /></button>
         </div>
         <div className="modal-body">
+          <div className="history-list">
           {history.length === 0 ? (
             <p style={{ color: 'var(--text-muted)', fontSize: 13, textAlign: 'center', padding: '20px 0' }}>
               No hay listas guardadas aún.
@@ -767,6 +768,7 @@ function ShoppingHistoryModal({ history, onClose }) {
               )
             })
           )}
+          </div>
         </div>
         <div className="modal-footer">
           <button className="btn btn-ghost" onClick={onClose}>Cerrar</button>
@@ -1800,33 +1802,46 @@ export default function App() {
 
   async function handleSaveAndClear() {
     if (savingList) return
-    const allIngIds = shoppingList.flatMap((cat) => cat.items.map(({ ingredient }) => ingredient.id))
-    // Clear UI optimistically first
-    const snapshotCustom = [...customItems]
-    await addDismissed(allIngIds)
-    clearCustomItemsThisWeek()
+
+    // Solo los ingredientes marcados
+    const checkedIngIds = shoppingList
+      .flatMap((cat) => cat.items.map(({ ingredient }) => ingredient.id))
+      .filter((id) => purchasedIds.has(id))
+
+    // Solo los extras marcados
+    const checkedCustom = customItems.filter((item) => purchasedIds.has('custom_' + item.id))
+
+    if (!checkedIngIds.length && !checkedCustom.length) return
+
+    // Limpiar UI optimísticamente
+    await addDismissed(checkedIngIds)
+    for (const item of checkedCustom) removeCustomItemRow(item.id)
     setPurchasedIds(new Set())
 
     setSavingList(true)
     try {
-      const allCatItems = [
-        ...shoppingList.map((cat) => ({
-          category: cat.category,
-          items: cat.items.map(({ ingredient }) => ({ id: ingredient.id, name: ingredient.name })),
-        })),
-        ...(snapshotCustom.length ? [{ category: 'Extra', items: snapshotCustom.map((i) => ({ id: i.id, name: i.name })) }] : []),
+      const historyItems = [
+        ...shoppingList
+          .map((cat) => ({
+            category: cat.category,
+            items: cat.items
+              .filter(({ ingredient }) => checkedIngIds.includes(ingredient.id))
+              .map(({ ingredient }) => ({ id: ingredient.id, name: ingredient.name })),
+          }))
+          .filter((c) => c.items.length),
+        ...(checkedCustom.length ? [{ category: 'Extra', items: checkedCustom.map((i) => ({ id: i.id, name: i.name })) }] : []),
       ]
-      if (allCatItems.length) {
+      if (historyItems.length) {
         await dbInsert('v2_shopping_lists', {
           week_key: weekKey,
           saved_at: new Date().toISOString(),
-          items: allCatItems,
+          items: historyItems,
         })
         if (historyOpen) loadShoppingHistory()
       }
-      showToast('Lista vaciada ✓')
+      showToast('Seleccionados eliminados ✓')
     } catch (e) {
-      showToast('Lista vaciada (historial no guardado)')
+      showToast('Eliminados (historial no guardado)')
     } finally {
       setSavingList(false)
     }
@@ -2193,10 +2208,10 @@ export default function App() {
               <button
                 className="btn-clear-purchased"
                 onClick={handleSaveAndClear}
-                disabled={savingList || totalItems === 0}
-                style={{ opacity: totalItems === 0 ? 0.45 : 1, marginTop: 0 }}
+                disabled={savingList || purchasedCount === 0}
+                style={{ opacity: purchasedCount === 0 ? 0.45 : 1, marginTop: 0 }}
               >
-                {savingList ? 'Guardando…' : 'Guardar y vaciar lista'}
+                {savingList ? 'Guardando…' : 'Guardar seleccionados'}
               </button>
             </div>
             <div className="custom-item-add">
