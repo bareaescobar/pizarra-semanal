@@ -1,5 +1,6 @@
 -- ─── Pizarra Semanal v3: multi-user + realtime sync ───
--- Ejecuta este SQL una vez en el SQL Editor de Supabase.
+-- Ejecuta este SQL una vez en el SQL Editor de Supabase Dashboard.
+-- Ruta: https://supabase.com/dashboard → tu proyecto → SQL Editor → New query → pegar y Run
 
 -- Usuarios (login)
 create table if not exists v2_users (
@@ -49,12 +50,23 @@ create table if not exists v2_color_overrides (
   type_key text not null
 );
 
--- Usuario por defecto (zeta / tatiguapa)
+-- ─── Desactivar RLS (Row Level Security) en todas las tablas nuevas ───
+-- Necesario para que la clave anónima pueda leer/escribir desde el navegador.
+alter table v2_users          disable row level security;
+alter table v2_pool_items     disable row level security;
+alter table v2_saved_recipes  disable row level security;
+alter table v2_custom_items   disable row level security;
+alter table v2_dismissed      disable row level security;
+alter table v2_color_overrides disable row level security;
+
+-- ─── Usuario por defecto (zeta / tatiguapa) ───
 insert into v2_users (username, password_hash) values
   ('zeta', '639acb9b2ff0dfb039e4d830207eb64cbddce2ceb338e6a6ae3733aaf953378d')
 on conflict (username) do nothing;
 
--- Habilitar realtime para sincronización entre dispositivos
+-- ─── Habilitar realtime para sincronización entre dispositivos ───
+-- Si alguna tabla ya estaba en la publicación, este bloque da error inocuo;
+-- puedes ignorarlo o ejecutar cada línea por separado.
 alter publication supabase_realtime add table v2_board_slots;
 alter publication supabase_realtime add table v2_pool_items;
 alter publication supabase_realtime add table v2_saved_recipes;
@@ -62,3 +74,6 @@ alter publication supabase_realtime add table v2_custom_items;
 alter publication supabase_realtime add table v2_dismissed;
 alter publication supabase_realtime add table v2_color_overrides;
 alter publication supabase_realtime add table v2_shopping_lists;
+
+-- ─── Forzar recarga del esquema en PostgREST ───
+notify pgrst, 'reload schema';

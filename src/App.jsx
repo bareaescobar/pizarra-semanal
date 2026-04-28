@@ -1034,13 +1034,15 @@ function LoginScreen({ onLogin }) {
     try {
       const hash = await sha256Hex(password)
       const users = await dbGet('v2_users', { username: username.trim().toLowerCase() })
-      if (users.length && users[0].password_hash === hash) {
-        onLogin({ id: users[0].id, username: users[0].username })
+      if (!users.length) {
+        setError(`Usuario "${username.trim()}" no encontrado. ¿Ejecutaste supabase-migration.sql?`)
+      } else if (users[0].password_hash !== hash) {
+        setError('Contraseña incorrecta.')
       } else {
-        setError('Usuario o contraseña incorrectos')
+        onLogin({ id: users[0].id, username: users[0].username })
       }
     } catch (err) {
-      setError('Error: ' + err.message + ' (¿ejecutaste supabase-migration.sql?)')
+      setError('Error de conexión: ' + err.message)
     } finally {
       setBusy(false)
     }
