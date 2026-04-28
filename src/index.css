@@ -1196,6 +1196,13 @@ html, body {
 }
 
 /* ─── Shopping History Modal ─── */
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
 .history-entry {
   border: 1.5px solid var(--border-soft);
   border-radius: var(--radius);
