@@ -50,14 +50,21 @@ create table if not exists v2_color_overrides (
   type_key text not null
 );
 
--- ─── Desactivar RLS (Row Level Security) en todas las tablas nuevas ───
--- Necesario para que la clave anónima pueda leer/escribir desde el navegador.
+-- ─── Desactivar RLS y conceder permisos al rol anónimo ───
+-- Necesario para que la clave anónima del navegador pueda leer/escribir.
 alter table v2_users          disable row level security;
 alter table v2_pool_items     disable row level security;
 alter table v2_saved_recipes  disable row level security;
 alter table v2_custom_items   disable row level security;
 alter table v2_dismissed      disable row level security;
 alter table v2_color_overrides disable row level security;
+
+grant all on v2_users          to anon, authenticated;
+grant all on v2_pool_items     to anon, authenticated;
+grant all on v2_saved_recipes  to anon, authenticated;
+grant all on v2_custom_items   to anon, authenticated;
+grant all on v2_dismissed      to anon, authenticated;
+grant all on v2_color_overrides to anon, authenticated;
 
 -- ─── Usuario por defecto (zeta / tatiguapa) ───
 insert into v2_users (username, password_hash) values
