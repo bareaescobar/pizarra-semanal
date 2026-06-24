@@ -260,7 +260,7 @@ async function callGeminiRecipe(dishName) {
 
 function getDietWarnings(slots, ingredients, colorOverrides, startDayOfWeek = 0) {
   const dayCats = DAYS.map((_, dayIdx) => {
-    const daySlots = slots.filter((s) => s.day_idx === dayIdx)
+    const daySlots = slots.filter((s) => s.day_idx === (startDayOfWeek + dayIdx) % 7)
     if (!daySlots.length) return null
     const counts = {}
     for (const s of daySlots) {
@@ -301,6 +301,37 @@ function DroppableCell({ id, children, isToday: isTodayCol }) {
   const { setNodeRef, isOver } = useDroppable({ id })
   return (
     <div ref={setNodeRef} className={`board-cell${isOver ? ' drag-over' : ''}${isTodayCol ? ' today-col' : ''}`}>
+      {children}
+    </div>
+  )
+}
+
+function DroppableTrayZone({ id, children, className = '' }) {
+  const { setNodeRef, isOver } = useDroppable({ id })
+  return (
+    <div ref={setNodeRef} className={`tray-drop-zone${isOver ? ' tray-drop-over' : ''} ${className}`}>
+      {children}
+    </div>
+  )
+}
+
+function DraggableCustomShoppingItem({ item, isPurchased, onCheck, onDelete }) {
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({ id: `shopping-custom-${item.id}` })
+  const style = { transform: CSS.Translate.toString(transform), opacity: isDragging ? 0.3 : 1 }
+  return (
+    <div ref={setNodeRef} style={style} className={`shopping-item${isPurchased ? ' purchased' : ''}`}>
+      <span ref={setActivatorNodeRef} className="shopping-drag-handle" {...attributes} {...listeners}>⠿</span>
+      <input type="checkbox" checked={isPurchased} onChange={onCheck} />
+      <span className="shopping-item-name">{titleCase(item.name)}</span>
+      <button className="postit-btn delete" style={{ opacity: 0.5, flexShrink: 0 }} onPointerDown={(e) => e.stopPropagation()} onClick={onDelete}><X size={10} /></button>
+    </div>
+  )
+}
+
+function DroppableShoppingCat({ category, children }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `shopping-cat-${category}` })
+  return (
+    <div ref={setNodeRef} className={`shopping-category${isOver ? ' shopping-cat-over' : ''}`}>
       {children}
     </div>
   )
@@ -1302,7 +1333,7 @@ export default function App() {
   const [weekOffset, setWeekOffset] = useState(0)
   const [startDayOfWeek, setStartDayOfWeekRaw] = useState(() => parseInt(localStorage.getItem('startDayOfWeek') || '0'))
   const setStartDayOfWeek = (val) => { setStartDayOfWeekRaw(val); localStorage.setItem('startDayOfWeek', val) }
-  const weekKey = getWeekKey(weekOffset, startDayOfWeek)
+  const weekKey = getWeekKey(weekOffset, 0)
 
   const [slots, setSlots] = useState([])
   const [ingredients, setIngredients] = useState([])
@@ -1382,6 +1413,12 @@ export default function App() {
   async function removeCustomItemRow(id) {
     setCustomItems((prev) => prev.filter((i) => i.id !== id))
     try { await dbDelete('v2_custom_items', id) } catch { reloadCustomItems() }
+  }
+  async function updateCustomItemRow(id, patch) {
+    setCustomItems((prev) => prev.map((i) => i.id === id ? { ...i, ...patch } : i))
+    try {
+      await supabase.from('v2_custom_items').update(patch).eq('id', id)
+    } catch { reloadCustomItems() }
   }
   async function clearCustomItemsThisWeek() {
     const ids = customItems.map((i) => i.id)
@@ -1580,7 +1617,7 @@ export default function App() {
 
     const boardSlot = await dbInsert('v2_board_slots', {
       week_key: weekKey,
-      day_idx: dayIdx,
+      day_idx: (startDayOfWeek + dayIdx) % 7,
       slot_key: slotKey,
       position: Date.now(),
       dish_id: dish.id,
@@ -1667,13 +1704,14 @@ export default function App() {
         await handleSaveDish({ dishName: movingSlot.dish_name, effort: 1, selectedIds: [], dayIdx, slotKey })
         deletePoolItem(movingSlot.id)
       } else {
+        const absIdx = (startDayOfWeek + dayIdx) % 7
         await dbUpdate('v2_board_slots', movingSlot.id, {
-          day_idx: dayIdx,
+          day_idx: absIdx,
           slot_key: slotKey,
           position: Date.now(),
         })
         setSlots((prev) => prev.map((s) =>
-          s.id === movingSlot.id ? { ...s, day_idx: dayIdx, slot_key: slotKey } : s
+          s.id === movingSlot.id ? { ...s, day_idx: absIdx, slot_key: slotKey } : s
         ))
       }
       setMovingSlot(null)
@@ -1710,15 +1748,57 @@ export default function App() {
   async function handleDragEnd({ active, over }) {
     setActiveId(null)
     if (!over) return
-    const [newDayIdx, newSlotKey] = over.id.split('-')
-    if (isNaN(parseInt(newDayIdx))) return
+
+    // Drop on tray zones
+    if (over.id === 'drop-pool') {
+      const slot = slots.find((s) => s.id === String(active.id))
+      if (!slot) return
+      await addPoolItem({ dish_name: slot.dish_name, effort: slot.effort_override || 1 })
+      await handleDelete(slot.id)
+      showToast(`"${titleCase(slot.dish_name)}" enviado a la despensa`)
+      return
+    }
+    if (over.id === 'drop-recipes') {
+      const slot = slots.find((s) => s.id === String(active.id))
+      if (slot) {
+        await addToSavedRecipes(slot.dish_name)
+        setTrayTab('recipes')
+        showToast(`"${titleCase(slot.dish_name)}" guardado en recetas`)
+        return
+      }
+      if (String(active.id).startsWith('pool-')) {
+        const poolId = String(active.id).replace('pool-', '')
+        const poolItem = poolItems.find((p) => p.id === poolId)
+        if (poolItem?.dish_name) {
+          await addToSavedRecipes(poolItem.dish_name)
+          setTrayTab('recipes')
+          showToast(`"${titleCase(poolItem.dish_name)}" guardado en recetas`)
+        }
+      }
+      return
+    }
+
+    // Shopping list custom item → different category section
+    if (String(over.id).startsWith('shopping-cat-')) {
+      if (!String(active.id).startsWith('shopping-custom-')) return
+      const newCategory = over.id.replace('shopping-cat-', '')
+      const customId = String(active.id).replace('shopping-custom-', '')
+      await updateCustomItemRow(customId, { category: newCategory })
+      return
+    }
+
+    const parts = over.id.split('-')
+    const newDisplayDay = parseInt(parts[0])
+    if (isNaN(newDisplayDay)) return
+    const newSlotKey = parts.slice(1).join('-')
+    const newAbsIdx = (startDayOfWeek + newDisplayDay) % 7
 
     // Recipe chip dropped on board cell → open modal pre-filled
     if (String(active.id).startsWith('recipe-')) {
       const recipeId = String(active.id).replace('recipe-', '')
       const recipe = savedRecipes.find((r) => r.id === recipeId)
       if (!recipe) return
-      setAddModal({ dayIdx: parseInt(newDayIdx), slotKey: newSlotKey, initialName: recipe.name })
+      setAddModal({ dayIdx: newDisplayDay, slotKey: newSlotKey, initialName: recipe.name })
       return
     }
 
@@ -1733,7 +1813,7 @@ export default function App() {
           effort: poolItem.effort || 1,
           selectedIds: [],
           slot: null,
-          dayIdx: parseInt(newDayIdx),
+          dayIdx: newDisplayDay,
           slotKey: newSlotKey,
         })
       } catch (e) {
@@ -1742,18 +1822,19 @@ export default function App() {
       return
     }
 
+    // Board slot → different board cell
     const slot = slots.find((s) => s.id === active.id)
     if (!slot) return
-    if (String(slot.day_idx) === newDayIdx && slot.slot_key === newSlotKey) return
+    if (slot.day_idx === newAbsIdx && slot.slot_key === newSlotKey) return
     try {
       await dbUpdate('v2_board_slots', slot.id, {
-        day_idx: parseInt(newDayIdx),
+        day_idx: newAbsIdx,
         slot_key: newSlotKey,
         position: Date.now(),
       })
       setSlots((prev) =>
         prev.map((s) =>
-          s.id === slot.id ? { ...s, day_idx: parseInt(newDayIdx), slot_key: newSlotKey } : s
+          s.id === slot.id ? { ...s, day_idx: newAbsIdx, slot_key: newSlotKey } : s
         )
       )
     } catch (e) {
@@ -1962,8 +2043,9 @@ export default function App() {
             <div className="board">
               <div className="board-header-empty" />
               {DAYS.map((_, i) => {
-                const date = getDayDate(weekKey, i)
-                const name = dayNameForIdx(i, startDayOfWeek)
+                const absIdx = (startDayOfWeek + i) % 7
+                const date = getDayDate(weekKey, absIdx)
+                const name = DAYS[absIdx]
                 return (
                   <div
                     key={i}
@@ -1980,12 +2062,13 @@ export default function App() {
               {SLOTS.map((slot) => (
                 <React.Fragment key={slot.key}>
                   <div className="board-slot-label">{slot.label}</div>
-                  {DAYS.map((_, dayIdx) => {
-                    const cellId = `${dayIdx}-${slot.key}`
+                  {DAYS.map((_, i) => {
+                    const absIdx = (startDayOfWeek + i) % 7
+                    const cellId = `${i}-${slot.key}`
                     const cellSlots = slots.filter(
-                      (s) => s.day_idx === dayIdx && s.slot_key === slot.key
+                      (s) => s.day_idx === absIdx && s.slot_key === slot.key
                     )
-                    const isTodayCol = isToday(getDayDate(weekKey, dayIdx))
+                    const isTodayCol = isToday(getDayDate(weekKey, absIdx))
                     return (
                       <DroppableCell key={cellId} id={cellId} isToday={isTodayCol}>
                         {cellSlots.map((s) => (
@@ -2003,10 +2086,10 @@ export default function App() {
                           <button
                             className={`btn-add-slot${copyingSlot || movingSlot ? ' copy-target' : ''}${pendingRecipeName ? ' copy-target' : ''}${cellSlots.length > 0 ? ' has-items' : ''}`}
                             onClick={() => {
-                              if (copyingSlot) handleCopySlot(dayIdx, slot.key)
-                              else if (movingSlot) handleMoveSlot(dayIdx, slot.key)
+                              if (copyingSlot) handleCopySlot(i, slot.key)
+                              else if (movingSlot) handleMoveSlot(i, slot.key)
                               else {
-                                setAddModal({ dayIdx, slotKey: slot.key, initialName: pendingRecipeName || undefined })
+                                setAddModal({ dayIdx: i, slotKey: slot.key, initialName: pendingRecipeName || undefined })
                                 setPendingRecipeName(null)
                               }
                             }}
@@ -2031,6 +2114,11 @@ export default function App() {
                 if (String(activeId).startsWith('recipe-')) {
                   const r = savedRecipes.find((x) => `recipe-${x.id}` === activeId)
                   return r ? <div className="postit-overlay"><span className="postit-name">{titleCase(r.name)}</span></div> : null
+                }
+                if (String(activeId).startsWith('shopping-custom-')) {
+                  const customId = String(activeId).replace('shopping-custom-', '')
+                  const item = customItems.find((i) => i.id === customId)
+                  return item ? <div className="shopping-item-overlay">{titleCase(item.name)}</div> : null
                 }
                 const s = slots.find((x) => x.id === activeId)
                 if (!s) return null
@@ -2067,55 +2155,59 @@ export default function App() {
           </div>
 
           {trayTab === 'pool' && (
-            <div className="tray-tab-content">
-              {movingSlot && !movingSlot.isPool && (
-                <button className="tray-move-zone" onClick={() => {
-                  addPoolItem({ dish_name: movingSlot.dish_name })
-                  handleDelete(movingSlot.id)
-                  setMovingSlot(null)
-                  showToast(`"${titleCase(movingSlot.dish_name)}" enviado a la despensa`)
-                }}>
-                  ⬇ Soltar aquí en la despensa
-                </button>
-              )}
-              {pendingRecipeName && (
-                <div className="copy-banner" style={{ marginBottom: 8 }}>
-                  <span>Añadiendo "{titleCase(pendingRecipeName)}" — haz clic en un hueco del tablero</span>
-                  <button onClick={() => setPendingRecipeName(null)}><X size={13} /></button>
+            <DroppableTrayZone id="drop-pool">
+              <div className="tray-tab-content">
+                {movingSlot && !movingSlot.isPool && (
+                  <button className="tray-move-zone" onClick={() => {
+                    addPoolItem({ dish_name: movingSlot.dish_name })
+                    handleDelete(movingSlot.id)
+                    setMovingSlot(null)
+                    showToast(`"${titleCase(movingSlot.dish_name)}" enviado a la despensa`)
+                  }}>
+                    ⬇ Soltar aquí en la despensa
+                  </button>
+                )}
+                {pendingRecipeName && (
+                  <div className="copy-banner" style={{ marginBottom: 8 }}>
+                    <span>Añadiendo "{titleCase(pendingRecipeName)}" — haz clic en un hueco del tablero</span>
+                    <button onClick={() => setPendingRecipeName(null)}><X size={13} /></button>
+                  </div>
+                )}
+                <div className="dishes-tray-list">
+                  {poolItems.map((item) => (
+                    <PoolPostit
+                      key={item.id}
+                      item={item}
+                      ingredients={ingredients}
+                      onUpdate={(updated) => updatePoolItem(item.id, { dish_name: updated.dish_name })}
+                      onDelete={() => deletePoolItem(item.id)}
+                      onContextMenu={(e, slot) => setContextMenu({ x: e.clientX, y: e.clientY, slot, isPool: true })}
+                    />
+                  ))}
                 </div>
-              )}
-              <div className="dishes-tray-list">
-                {poolItems.map((item) => (
-                  <PoolPostit
-                    key={item.id}
-                    item={item}
-                    ingredients={ingredients}
-                    onUpdate={(updated) => updatePoolItem(item.id, { dish_name: updated.dish_name })}
-                    onDelete={() => deletePoolItem(item.id)}
-                    onContextMenu={(e, slot) => setContextMenu({ x: e.clientX, y: e.clientY, slot, isPool: true })}
-                  />
-                ))}
               </div>
-            </div>
+            </DroppableTrayZone>
           )}
 
           {trayTab === 'recipes' && (
-            <div className="tray-tab-content">
-              {savedRecipes.length === 0 && (
-                <p className="tray-empty">Aún no hay recetas. Se guardan automáticamente al crear platos.</p>
-              )}
-              <div className="dishes-tray-list">
-                {savedRecipes.map((recipe) => (
-                  <RecipePostit
-                    key={recipe.id}
-                    item={recipe}
-                    onSelect={() => { if (recipe.name) { setPendingRecipeName(recipe.name); setTrayTab('pool') } }}
-                    onUpdate={(updated) => updateRecipe(recipe.id, { name: updated.name })}
-                    onDelete={() => deleteRecipe(recipe.id)}
-                  />
-                ))}
+            <DroppableTrayZone id="drop-recipes">
+              <div className="tray-tab-content">
+                {savedRecipes.length === 0 && (
+                  <p className="tray-empty">Aún no hay recetas. Se guardan automáticamente al crear platos.</p>
+                )}
+                <div className="dishes-tray-list">
+                  {savedRecipes.map((recipe) => (
+                    <RecipePostit
+                      key={recipe.id}
+                      item={recipe}
+                      onSelect={() => { if (recipe.name) { setPendingRecipeName(recipe.name); setTrayTab('pool') } }}
+                      onUpdate={(updated) => updateRecipe(recipe.id, { name: updated.name })}
+                      onDelete={() => deleteRecipe(recipe.id)}
+                    />
+                  ))}
+                </div>
               </div>
-            </div>
+            </DroppableTrayZone>
           )}
         </div>
         </div>{/* /app-main */}
@@ -2179,7 +2271,7 @@ export default function App() {
                     const custom = customItems.filter((i) => (i.category || 'Otros') === category)
                     if (!regular.length && !custom.length) return null
                     return (
-                      <div key={category} className="shopping-category">
+                      <DroppableShoppingCat key={category} category={category}>
                         <div className="shopping-category-title" style={{ borderLeft: `3px solid ${CATEGORY_COLORS[category] ?? 'var(--accent)'}`, paddingLeft: 8 }}>{category}</div>
                         {regular.map(({ ingredient, dishes }) => (
                           <div key={ingredient.id} className={`shopping-item${purchasedIds.has(ingredient.id) ? ' purchased' : ''}`}>
@@ -2192,13 +2284,15 @@ export default function App() {
                           </div>
                         ))}
                         {custom.map((item) => (
-                          <div key={item.id} className={`shopping-item${purchasedIds.has('custom_' + item.id) ? ' purchased' : ''}`}>
-                            <input type="checkbox" checked={purchasedIds.has('custom_' + item.id)} onChange={() => toggleCustomItem(item.id)} />
-                            <span className="shopping-item-name">{titleCase(item.name)}</span>
-                            <button className="postit-btn delete" style={{ opacity: 0.5, flexShrink: 0 }} onPointerDown={(e) => e.stopPropagation()} onClick={() => removeCustomItem(item.id)}><X size={10} /></button>
-                          </div>
+                          <DraggableCustomShoppingItem
+                            key={item.id}
+                            item={item}
+                            isPurchased={purchasedIds.has('custom_' + item.id)}
+                            onCheck={() => toggleCustomItem(item.id)}
+                            onDelete={() => removeCustomItem(item.id)}
+                          />
                         ))}
-                      </div>
+                      </DroppableShoppingCat>
                     )
                   })
                 })()}
