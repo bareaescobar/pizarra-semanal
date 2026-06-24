@@ -128,9 +128,9 @@ function getDayDate(weekKey, dayIdx) {
   return new Date(y, m - 1, d + dayIdx)
 }
 
-function formatWeekRange(weekKey) {
-  const start = getDayDate(weekKey, 0)
-  const end = getDayDate(weekKey, 6)
+function formatWeekRange(weekKey, startDayOfWeek = 0) {
+  const start = getDayDate(weekKey, startDayOfWeek)
+  const end = getDayDate(weekKey, startDayOfWeek + 6)
   const fmt = (d) => d.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })
   return `${fmt(start)} – ${fmt(end)}`
 }
@@ -258,9 +258,11 @@ async function callGeminiRecipe(dishName) {
   return text.trim()
 }
 
-function getDietWarnings(slots, ingredients, colorOverrides, startDayOfWeek = 0) {
-  const dayCats = DAYS.map((_, dayIdx) => {
-    const daySlots = slots.filter((s) => s.day_idx === (startDayOfWeek + dayIdx) % 7)
+function getDietWarnings(slots, ingredients, colorOverrides, startDayOfWeek = 0, weekKey = null, nextWeekKey = null) {
+  const dayCats = Array.from({ length: 7 }, (_, dayIdx) => {
+    const absIdx = (startDayOfWeek + dayIdx) % 7
+    const colWk = weekKey && startDayOfWeek + dayIdx >= 7 ? nextWeekKey : weekKey
+    const daySlots = slots.filter((s) => s.day_idx === absIdx && (colWk === null || s.week_key === colWk))
     if (!daySlots.length) return null
     const counts = {}
     for (const s of daySlots) {
@@ -1334,6 +1336,7 @@ export default function App() {
   const [startDayOfWeek, setStartDayOfWeekRaw] = useState(() => parseInt(localStorage.getItem('startDayOfWeek') || '0'))
   const setStartDayOfWeek = (val) => { setStartDayOfWeekRaw(val); localStorage.setItem('startDayOfWeek', val) }
   const weekKey = getWeekKey(weekOffset, 0)
+  const nextWeekKey = getWeekKey(weekOffset + 1, 0)
 
   const [slots, setSlots] = useState([])
   const [ingredients, setIngredients] = useState([])
@@ -1478,7 +1481,7 @@ export default function App() {
 
   useEffect(() => {
     if (ingredients.length > 0) loadSlots()
-  }, [weekKey, ingredients])
+  }, [weekKey, nextWeekKey, startDayOfWeek, ingredients])
 
   // Global realtime subscriptions (independent of week)
   useEffect(() => {
@@ -1533,7 +1536,13 @@ export default function App() {
 
   async function loadSlots() {
     try {
-      const boardSlots = await dbGet('v2_board_slots', { week_key: weekKey })
+      const weekKeys = startDayOfWeek > 0 ? [weekKey, nextWeekKey] : [weekKey]
+      const { data: rawSlots, error: slotsErr } = await supabase
+        .from('v2_board_slots')
+        .select('*')
+        .in('week_key', weekKeys)
+      if (slotsErr) throw slotsErr
+      const boardSlots = rawSlots || []
       if (!boardSlots.length) {
         setSlots([])
         return
@@ -1615,8 +1624,9 @@ export default function App() {
 
     addToSavedRecipes(dishName)
 
+    const colWeekKey = startDayOfWeek + dayIdx >= 7 ? nextWeekKey : weekKey
     const boardSlot = await dbInsert('v2_board_slots', {
-      week_key: weekKey,
+      week_key: colWeekKey,
       day_idx: (startDayOfWeek + dayIdx) % 7,
       slot_key: slotKey,
       position: Date.now(),
@@ -1705,13 +1715,15 @@ export default function App() {
         deletePoolItem(movingSlot.id)
       } else {
         const absIdx = (startDayOfWeek + dayIdx) % 7
+        const colWk = startDayOfWeek + dayIdx >= 7 ? nextWeekKey : weekKey
         await dbUpdate('v2_board_slots', movingSlot.id, {
+          week_key: colWk,
           day_idx: absIdx,
           slot_key: slotKey,
           position: Date.now(),
         })
         setSlots((prev) => prev.map((s) =>
-          s.id === movingSlot.id ? { ...s, day_idx: absIdx, slot_key: slotKey } : s
+          s.id === movingSlot.id ? { ...s, week_key: colWk, day_idx: absIdx, slot_key: slotKey } : s
         ))
       }
       setMovingSlot(null)
@@ -1792,6 +1804,7 @@ export default function App() {
     if (isNaN(newDisplayDay)) return
     const newSlotKey = parts.slice(1).join('-')
     const newAbsIdx = (startDayOfWeek + newDisplayDay) % 7
+    const newColWk = startDayOfWeek + newDisplayDay >= 7 ? nextWeekKey : weekKey
 
     // Recipe chip dropped on board cell → open modal pre-filled
     if (String(active.id).startsWith('recipe-')) {
@@ -1825,16 +1838,17 @@ export default function App() {
     // Board slot → different board cell
     const slot = slots.find((s) => s.id === active.id)
     if (!slot) return
-    if (slot.day_idx === newAbsIdx && slot.slot_key === newSlotKey) return
+    if (slot.day_idx === newAbsIdx && slot.slot_key === newSlotKey && slot.week_key === newColWk) return
     try {
       await dbUpdate('v2_board_slots', slot.id, {
+        week_key: newColWk,
         day_idx: newAbsIdx,
         slot_key: newSlotKey,
         position: Date.now(),
       })
       setSlots((prev) =>
         prev.map((s) =>
-          s.id === slot.id ? { ...s, day_idx: newAbsIdx, slot_key: newSlotKey } : s
+          s.id === slot.id ? { ...s, week_key: newColWk, day_idx: newAbsIdx, slot_key: newSlotKey } : s
         )
       )
     } catch (e) {
@@ -1967,7 +1981,7 @@ export default function App() {
   }
 
   const activeSlot = activeId ? slots.find((s) => s.id === activeId) : null
-  const dietWarnings = useMemo(() => getDietWarnings(slots, ingredients, colorOverrides, startDayOfWeek), [slots, ingredients, colorOverrides, startDayOfWeek])
+  const dietWarnings = useMemo(() => getDietWarnings(slots, ingredients, colorOverrides, startDayOfWeek, weekKey, nextWeekKey), [slots, ingredients, colorOverrides, startDayOfWeek, weekKey, nextWeekKey])
 
   if (!currentUser) return <LoginScreen onLogin={handleLogin} />
 
@@ -1988,7 +2002,7 @@ export default function App() {
           <button onClick={() => setWeekOffset((w) => w - 1)} title="7 días atrás">
             <ChevronLeft size={16} />
           </button>
-          <span>{formatWeekRange(weekKey)}</span>
+          <span>{formatWeekRange(weekKey, startDayOfWeek)}</span>
           <button onClick={() => setWeekOffset((w) => w + 1)} title="7 días adelante">
             <ChevronRight size={16} />
           </button>
@@ -2043,9 +2057,8 @@ export default function App() {
             <div className="board">
               <div className="board-header-empty" />
               {DAYS.map((_, i) => {
-                const absIdx = (startDayOfWeek + i) % 7
-                const date = getDayDate(weekKey, absIdx)
-                const name = DAYS[absIdx]
+                const date = getDayDate(weekKey, startDayOfWeek + i)
+                const name = DAYS[(startDayOfWeek + i) % 7]
                 return (
                   <div
                     key={i}
@@ -2064,11 +2077,12 @@ export default function App() {
                   <div className="board-slot-label">{slot.label}</div>
                   {DAYS.map((_, i) => {
                     const absIdx = (startDayOfWeek + i) % 7
+                    const colWk = startDayOfWeek + i >= 7 ? nextWeekKey : weekKey
                     const cellId = `${i}-${slot.key}`
                     const cellSlots = slots.filter(
-                      (s) => s.day_idx === absIdx && s.slot_key === slot.key
+                      (s) => s.day_idx === absIdx && s.slot_key === slot.key && s.week_key === colWk
                     )
-                    const isTodayCol = isToday(getDayDate(weekKey, absIdx))
+                    const isTodayCol = isToday(getDayDate(weekKey, startDayOfWeek + i))
                     return (
                       <DroppableCell key={cellId} id={cellId} isToday={isTodayCol}>
                         {cellSlots.map((s) => (
