@@ -813,7 +813,7 @@ function ShoppingHistoryModal({ history, onClose }) {
 
 // ─── RecipePostit ─────────────────────────────────────────────────────────────
 
-function RecipePostit({ item, onUpdate, onDelete, onSelect }) {
+function RecipePostit({ item, onUpdate, onDelete, onSelect, ingredients = [] }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({ id: `recipe-${item.id}` })
   const [editing, setEditing] = useState(!item.name)
   const [draft, setDraft] = useState(item.name)
@@ -821,11 +821,13 @@ function RecipePostit({ item, onUpdate, onDelete, onSelect }) {
 
   useEffect(() => { if (editing) inputRef.current?.focus() }, [editing])
 
+  const category = getDominantCategory([], ingredients, item.name)
+  const bgColor = category ? (CATEGORY_PASTELS[category] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
   const rotation = slotRotation(item.id)
   const style = {
     ...(transform ? { transform: CSS.Translate.toString(transform) } : {}),
     '--base-rotate': `${rotation}deg`,
-    background: '#ddd6fe',
+    background: bgColor,
     opacity: isDragging ? 0.4 : 1,
   }
 
@@ -1465,6 +1467,8 @@ export default function App() {
 
   const [trayTab, setTrayTab] = useState('pool')
   const [pendingRecipeName, setPendingRecipeName] = useState(null)
+  const [recipeSearch, setRecipeSearch] = useState('')
+  const [recipeSort, setRecipeSort] = useState('recent')
 
   const initDone = useRef(false)
 
@@ -1983,6 +1987,24 @@ export default function App() {
   const activeSlot = activeId ? slots.find((s) => s.id === activeId) : null
   const dietWarnings = useMemo(() => getDietWarnings(slots, ingredients, colorOverrides, startDayOfWeek, weekKey, nextWeekKey), [slots, ingredients, colorOverrides, startDayOfWeek, weekKey, nextWeekKey])
 
+  const filteredRecipes = useMemo(() => {
+    let result = savedRecipes
+    if (recipeSearch.trim()) {
+      const q = recipeSearch.toLowerCase()
+      result = result.filter((r) => r.name.toLowerCase().includes(q))
+    }
+    if (recipeSort === 'az') {
+      result = [...result].sort((a, b) => a.name.localeCompare(b.name, 'es'))
+    } else if (recipeSort === 'category') {
+      result = [...result].sort((a, b) => {
+        const catA = getDominantCategory([], ingredients, a.name) || 'Ω'
+        const catB = getDominantCategory([], ingredients, b.name) || 'Ω'
+        return catA.localeCompare(catB, 'es') || a.name.localeCompare(b.name, 'es')
+      })
+    }
+    return result
+  }, [savedRecipes, recipeSearch, recipeSort, ingredients])
+
   if (!currentUser) return <LoginScreen onLogin={handleLogin} />
 
   if (loading) {
@@ -2127,7 +2149,10 @@ export default function App() {
                 }
                 if (String(activeId).startsWith('recipe-')) {
                   const r = savedRecipes.find((x) => `recipe-${x.id}` === activeId)
-                  return r ? <div className="postit-overlay"><span className="postit-name">{titleCase(r.name)}</span></div> : null
+                  if (!r) return null
+                  const cat = getDominantCategory([], ingredients, r.name)
+                  const bg = cat ? (CATEGORY_PASTELS[cat] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
+                  return <div className="postit-overlay" style={{ background: bg }}><span className="postit-name">{titleCase(r.name)}</span></div>
                 }
                 if (String(activeId).startsWith('shopping-custom-')) {
                   const customId = String(activeId).replace('shopping-custom-', '')
@@ -2206,14 +2231,30 @@ export default function App() {
           {trayTab === 'recipes' && (
             <DroppableTrayZone id="drop-recipes">
               <div className="tray-tab-content">
-                {savedRecipes.length === 0 && (
-                  <p className="tray-empty">Aún no hay recetas. Se guardan automáticamente al crear platos.</p>
+                {savedRecipes.length > 0 && (
+                  <div className="recipe-controls">
+                    <input
+                      className="recipe-search-input"
+                      placeholder="Buscar receta…"
+                      value={recipeSearch}
+                      onChange={(e) => setRecipeSearch(e.target.value)}
+                    />
+                    <div className="recipe-sort-btns">
+                      {[['recent', '↕ Recientes'], ['az', 'A–Z'], ['category', 'Categoría']].map(([key, label]) => (
+                        <button key={key} className={`recipe-sort-btn${recipeSort === key ? ' active' : ''}`} onClick={() => setRecipeSort(key)}>{label}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {filteredRecipes.length === 0 && (
+                  <p className="tray-empty">{savedRecipes.length === 0 ? 'Aún no hay recetas. Se guardan automáticamente al crear platos.' : 'Sin resultados para esa búsqueda.'}</p>
                 )}
                 <div className="dishes-tray-list">
-                  {savedRecipes.map((recipe) => (
+                  {filteredRecipes.map((recipe) => (
                     <RecipePostit
                       key={recipe.id}
                       item={recipe}
+                      ingredients={ingredients}
                       onSelect={() => { if (recipe.name) { setPendingRecipeName(recipe.name); setTrayTab('pool') } }}
                       onUpdate={(updated) => updateRecipe(recipe.id, { name: updated.name })}
                       onDelete={() => deleteRecipe(recipe.id)}
