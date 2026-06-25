@@ -28,6 +28,9 @@ import {
   Share2,
   LogOut,
   Lightbulb,
+  Star,
+  Tag,
+  Wand2,
 } from 'lucide-react'
 import supabase, { dbGet, dbInsert, dbUpdate, dbDelete } from './supabase.js'
 import { INGREDIENT_CATEGORIES, DEFAULT_INGREDIENTS } from './ingredients.js'
@@ -813,13 +816,17 @@ function ShoppingHistoryModal({ history, onClose }) {
 
 // ─── RecipePostit ─────────────────────────────────────────────────────────────
 
-function RecipePostit({ item, onUpdate, onDelete, onSelect, ingredients = [] }) {
+function RecipePostit({ item, onUpdate, onDelete, onSelect, ingredients = [], usageCount = 0 }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({ id: `recipe-${item.id}` })
   const [editing, setEditing] = useState(!item.name)
   const [draft, setDraft] = useState(item.name)
+  const [notesOpen, setNotesOpen] = useState(false)
+  const [notesDraft, setNotesDraft] = useState(item.description || '')
+  const [tagInput, setTagInput] = useState('')
   const inputRef = useRef(null)
 
   useEffect(() => { if (editing) inputRef.current?.focus() }, [editing])
+  useEffect(() => { setNotesDraft(item.description || '') }, [item.description])
 
   const category = getDominantCategory([], ingredients, item.name)
   const bgColor = category ? (CATEGORY_PASTELS[category] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
@@ -835,11 +842,36 @@ function RecipePostit({ item, onUpdate, onDelete, onSelect, ingredients = [] }) 
     const trimmed = draft.trim()
     if (!trimmed) { onDelete(); return }
     setEditing(false)
-    if (trimmed !== item.name) onUpdate({ ...item, name: trimmed })
+    if (trimmed !== item.name) onUpdate({ name: trimmed })
   }
 
+  function setRating(r) {
+    onUpdate({ rating: item.rating === r ? null : r })
+  }
+
+  function commitNotes() {
+    const trimmed = notesDraft.trim()
+    const current = item.description || ''
+    if (trimmed !== current) onUpdate({ description: trimmed || null })
+  }
+
+  function addTag() {
+    const trimmed = tagInput.trim().toLowerCase()
+    if (!trimmed) return
+    const current = item.tags || []
+    if (!current.includes(trimmed)) onUpdate({ tags: [...current, trimmed] })
+    setTagInput('')
+  }
+
+  function removeTag(tag) {
+    onUpdate({ tags: (item.tags || []).filter((t) => t !== tag) })
+  }
+
+  const tags = item.tags || []
+  const hasNotes = !!item.description
+
   return (
-    <div ref={setNodeRef} style={style} className="postit pool-postit">
+    <div ref={setNodeRef} style={style} className="postit pool-postit recipe-postit">
       <div className="postit-header">
         {editing ? (
           <input
@@ -871,10 +903,186 @@ function RecipePostit({ item, onUpdate, onDelete, onSelect, ingredients = [] }) 
           </button>
         </div>
       </div>
+
+      <div className="recipe-star-row" onPointerDown={(e) => e.stopPropagation()}>
+        {[1, 2, 3, 4, 5].map((n) => (
+          <button
+            key={n}
+            className={`recipe-star${(item.rating || 0) >= n ? ' active' : ''}`}
+            onClick={() => setRating(n)}
+            title={`${n} estrella${n > 1 ? 's' : ''}`}
+          >★</button>
+        ))}
+        {usageCount > 0 && <span className="recipe-usage">{usageCount}×</span>}
+      </div>
+
+      {tags.length > 0 && (
+        <div className="recipe-tags-row" onPointerDown={(e) => e.stopPropagation()}>
+          {tags.map((tag) => (
+            <span key={tag} className="recipe-tag">
+              {tag}
+              <button className="recipe-tag-remove" onClick={() => removeTag(tag)}>×</button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {!notesOpen && hasNotes && (
+        <div
+          className="recipe-notes-preview"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => setNotesOpen(true)}
+          title="Ver notas"
+        >
+          {item.description}
+        </div>
+      )}
+
+      {notesOpen && (
+        <div onPointerDown={(e) => e.stopPropagation()}>
+          <textarea
+            className="recipe-notes-input"
+            placeholder="Notas, trucos, ingredientes clave…"
+            value={notesDraft}
+            onChange={(e) => setNotesDraft(e.target.value)}
+            onBlur={commitNotes}
+            rows={3}
+          />
+          <div className="recipe-tag-input-row">
+            <input
+              className="recipe-tag-input"
+              placeholder="Etiqueta…"
+              value={tagInput}
+              onChange={(e) => setTagInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTag() } }}
+            />
+            <button className="recipe-tag-add-btn" onClick={addTag}>+</button>
+          </div>
+        </div>
+      )}
+
       <div className="postit-footer">
-        <div />
+        <button
+          className={`postit-btn${hasNotes || notesOpen ? ' notes-active' : ''}`}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => setNotesOpen((o) => !o)}
+          title={notesOpen ? 'Cerrar notas' : 'Notas y etiquetas'}
+        >
+          <Tag size={11} />
+        </button>
         <div ref={setActivatorNodeRef} {...listeners} {...attributes} className="drag-handle" title="Arrastrar al tablero">
           <GripVertical size={12} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── AutoMenuModal ─────────────────────────────────────────────────────────────
+
+function AutoMenuModal({ slots, poolItems, savedRecipes, ingredients, weekKey, nextWeekKey, startDayOfWeek, onClose, onConfirm }) {
+  function shuffleArr(arr) {
+    const a = [...arr]
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]]
+    }
+    return a
+  }
+
+  function generate() {
+    const candidates = [...new Set([
+      ...poolItems.filter((p) => p.dish_name).map((p) => p.dish_name),
+      ...savedRecipes.filter((r) => r.name).map((r) => r.name),
+    ])]
+    if (!candidates.length) return []
+
+    const proposals = []
+
+    for (const slot of SLOTS) {
+      const shuffled = shuffleArr(candidates)
+      let si = 0
+
+      for (let i = 0; i < 7; i++) {
+        const absIdx = (startDayOfWeek + i) % 7
+        const colWk = startDayOfWeek + i >= 7 ? nextWeekKey : weekKey
+        const existing = slots.find(
+          (s) => s.day_idx === absIdx && s.slot_key === slot.key && s.week_key === colWk
+        )
+        if (existing) {
+          proposals.push({ displayDay: i, slotKey: slot.key, dishName: existing.dish_name, isExisting: true })
+          continue
+        }
+
+        const prevEntry = proposals.find((p) => p.displayDay === i - 1 && p.slotKey === slot.key)
+        const prevCat = prevEntry ? getDominantCategory([], ingredients, prevEntry.dishName) : null
+
+        let chosen = null
+        for (let attempt = 0; attempt < shuffled.length; attempt++) {
+          const candidate = shuffled[(si + attempt) % shuffled.length]
+          const cat = getDominantCategory([], ingredients, candidate)
+          if (!prevCat || !cat || cat !== prevCat) {
+            chosen = candidate
+            si = (si + attempt + 1) % shuffled.length
+            break
+          }
+        }
+        if (!chosen) { chosen = shuffled[si % shuffled.length]; si = (si + 1) % shuffled.length }
+        proposals.push({ displayDay: i, slotKey: slot.key, dishName: chosen, isExisting: false })
+      }
+    }
+    return proposals
+  }
+
+  const [proposals, setProposals] = useState(() => generate())
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal auto-menu-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2>Sugerencia de semana</h2>
+          <button className="modal-close" onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="modal-body">
+          <div className="auto-menu-grid">
+            <div className="auto-menu-corner" />
+            {Array.from({ length: 7 }, (_, i) => (
+              <div key={i} className="auto-menu-col-header">
+                {DAYS[(startDayOfWeek + i) % 7].slice(0, 3)}
+              </div>
+            ))}
+            {SLOTS.map((slot) => (
+              <React.Fragment key={slot.key}>
+                <div className="auto-menu-row-label">{slot.label}</div>
+                {Array.from({ length: 7 }, (_, i) => {
+                  const entry = proposals.find((p) => p.displayDay === i && p.slotKey === slot.key)
+                  const cat = entry ? getDominantCategory([], ingredients, entry.dishName) : null
+                  const bg = entry && !entry.isExisting ? (cat ? (CATEGORY_PASTELS[cat] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']) : undefined
+                  return (
+                    <div key={i} className={`auto-menu-cell${entry?.isExisting ? ' existing' : ' proposed'}`} style={bg ? { background: bg } : {}}>
+                      {entry ? titleCase(entry.dishName) : '—'}
+                    </div>
+                  )
+                })}
+              </React.Fragment>
+            ))}
+          </div>
+          {proposals.length === 0 && (
+            <p className="auto-menu-empty">Añade platos a tu despensa o recetas para poder generar un menú.</p>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={() => setProposals(generate())}>
+            <RotateCcw size={14} /> Re-generar
+          </button>
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button
+            className="btn"
+            disabled={proposals.filter((p) => !p.isExisting).length === 0}
+            onClick={() => onConfirm(proposals.filter((p) => !p.isExisting))}
+          >
+            Guardar propuesta
+          </button>
         </div>
       </div>
     </div>
@@ -1469,6 +1677,8 @@ export default function App() {
   const [pendingRecipeName, setPendingRecipeName] = useState(null)
   const [recipeSearch, setRecipeSearch] = useState('')
   const [recipeSort, setRecipeSort] = useState('recent')
+  const [selectedTag, setSelectedTag] = useState(null)
+  const [autoMenuOpen, setAutoMenuOpen] = useState(false)
 
   const initDone = useRef(false)
 
@@ -1757,6 +1967,18 @@ export default function App() {
     })
   }
 
+  async function handleAutoMenuConfirm(proposals) {
+    setAutoMenuOpen(false)
+    for (const p of proposals) {
+      try {
+        await handleSaveDish({ dishName: p.dishName, effort: 1, selectedIds: [], dayIdx: p.displayDay, slotKey: p.slotKey })
+      } catch (e) {
+        console.error('Error al guardar plato sugerido:', e)
+      }
+    }
+    showToast('Semana generada ✓')
+  }
+
   function handleDragStart({ active }) {
     setActiveId(active.id)
   }
@@ -1987,8 +2209,30 @@ export default function App() {
   const activeSlot = activeId ? slots.find((s) => s.id === activeId) : null
   const dietWarnings = useMemo(() => getDietWarnings(slots, ingredients, colorOverrides, startDayOfWeek, weekKey, nextWeekKey), [slots, ingredients, colorOverrides, startDayOfWeek, weekKey, nextWeekKey])
 
+  const recipeUsageCount = useMemo(() => {
+    const count = {}
+    for (const s of allSlots) {
+      if (s.dish_name && s.dish_name !== '?') {
+        const k = s.dish_name.toLowerCase()
+        count[k] = (count[k] || 0) + 1
+      }
+    }
+    return count
+  }, [allSlots])
+
+  const allTags = useMemo(() => {
+    const tagSet = new Set()
+    for (const r of savedRecipes) {
+      for (const t of (r.tags || [])) tagSet.add(t)
+    }
+    return [...tagSet].sort()
+  }, [savedRecipes])
+
   const filteredRecipes = useMemo(() => {
     let result = savedRecipes
+    if (selectedTag) {
+      result = result.filter((r) => (r.tags || []).includes(selectedTag))
+    }
     if (recipeSearch.trim()) {
       const q = recipeSearch.toLowerCase()
       result = result.filter((r) => r.name.toLowerCase().includes(q))
@@ -2001,9 +2245,11 @@ export default function App() {
         const catB = getDominantCategory([], ingredients, b.name) || 'Ω'
         return catA.localeCompare(catB, 'es') || a.name.localeCompare(b.name, 'es')
       })
+    } else if (recipeSort === 'rating') {
+      result = [...result].sort((a, b) => (b.rating || 0) - (a.rating || 0) || a.name.localeCompare(b.name, 'es'))
     }
     return result
-  }, [savedRecipes, recipeSearch, recipeSort, ingredients])
+  }, [savedRecipes, recipeSearch, recipeSort, ingredients, selectedTag])
 
   if (!currentUser) return <LoginScreen onLogin={handleLogin} />
 
@@ -2189,6 +2435,9 @@ export default function App() {
                 <button className="btn-add-slot tray-add-btn tray-ai-btn" onClick={() => setAiProposalsOpen(true)}>
                   <Lightbulb size={11} /> IA
                 </button>
+                <button className="btn-add-slot tray-add-btn" onClick={() => setAutoMenuOpen(true)} title="Sugerir semana automáticamente">
+                  <Wand2 size={11} /> Sugerir
+                </button>
               </>
             )}
           </div>
@@ -2233,6 +2482,19 @@ export default function App() {
               <div className="tray-tab-content">
                 {savedRecipes.length > 0 && (
                   <div className="recipe-controls">
+                    {allTags.length > 0 && (
+                      <div className="tag-filter-chips">
+                        {allTags.map((tag) => (
+                          <button
+                            key={tag}
+                            className={`tag-filter-chip${selectedTag === tag ? ' active' : ''}`}
+                            onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
+                          >
+                            {tag}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     <input
                       className="recipe-search-input"
                       placeholder="Buscar receta…"
@@ -2240,7 +2502,7 @@ export default function App() {
                       onChange={(e) => setRecipeSearch(e.target.value)}
                     />
                     <div className="recipe-sort-btns">
-                      {[['recent', '↕ Recientes'], ['az', 'A–Z'], ['category', 'Categoría']].map(([key, label]) => (
+                      {[['recent', '↕ Recientes'], ['az', 'A–Z'], ['category', 'Categoría'], ['rating', '⭐ Valoración']].map(([key, label]) => (
                         <button key={key} className={`recipe-sort-btn${recipeSort === key ? ' active' : ''}`} onClick={() => setRecipeSort(key)}>{label}</button>
                       ))}
                     </div>
@@ -2255,8 +2517,9 @@ export default function App() {
                       key={recipe.id}
                       item={recipe}
                       ingredients={ingredients}
+                      usageCount={recipeUsageCount[recipe.name?.toLowerCase()] || 0}
                       onSelect={() => { if (recipe.name) { setPendingRecipeName(recipe.name); setTrayTab('pool') } }}
-                      onUpdate={(updated) => updateRecipe(recipe.id, { name: updated.name })}
+                      onUpdate={(patch) => updateRecipe(recipe.id, patch)}
                       onDelete={() => deleteRecipe(recipe.id)}
                     />
                   ))}
@@ -2461,6 +2724,20 @@ export default function App() {
           savedRecipes={savedRecipes}
           onClose={() => setAiProposalsOpen(false)}
           onAdd={(name) => { addToSavedRecipes(name); showToast(`"${titleCase(name)}" añadida a recetas`) }}
+        />
+      )}
+
+      {autoMenuOpen && (
+        <AutoMenuModal
+          slots={slots}
+          poolItems={poolItems}
+          savedRecipes={savedRecipes}
+          ingredients={ingredients}
+          weekKey={weekKey}
+          nextWeekKey={nextWeekKey}
+          startDayOfWeek={startDayOfWeek}
+          onClose={() => setAutoMenuOpen(false)}
+          onConfirm={handleAutoMenuConfirm}
         />
       )}
 
