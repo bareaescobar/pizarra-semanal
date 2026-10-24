@@ -1265,7 +1265,7 @@ function RecipeModal({ slot, onClose }) {
 
 // ─── LoginScreen ─────────────────────────────────────────────────────────────
 
-function LoginScreen({ onLogin }) {
+function LoginScreen() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState(null)
@@ -1277,15 +1277,15 @@ function LoginScreen({ onLogin }) {
     setError(null)
     setBusy(true)
     try {
-      const hash = await sha256Hex(password)
-      const users = await dbGet('v2_users', { username: username.trim().toLowerCase() })
-      if (!users.length) {
-        setError(`Usuario "${username.trim()}" no encontrado. ¿Ejecutaste supabase-migration.sql?`)
-      } else if (users[0].password_hash !== hash) {
-        setError('Contraseña incorrecta.')
-      } else {
-        onLogin({ id: users[0].id, username: users[0].username })
+      const uname = username.trim().toLowerCase()
+      const email = `${uname}@pizarra.app`
+      let { error: authErr } = await supabase.auth.signInWithPassword({ email, password })
+      if (authErr) {
+        // Usuario aún no migrado desde el login antiguo: la función lo migra si la contraseña es correcta
+        const { data } = await supabase.functions.invoke('legacy-login', { body: { username: uname, password } })
+        if (data?.ok) ({ error: authErr } = await supabase.auth.signInWithPassword({ email, password }))
       }
+      if (authErr) setError('Usuario o contraseña incorrectos.')
     } catch (err) {
       setError('Error de conexión: ' + err.message)
     } finally {
@@ -1529,16 +1529,21 @@ function AIRecipeProposalsModal({ savedRecipes, onClose, onAdd }) {
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('currentUser') || 'null') } catch { return null }
-  })
+  const [currentUser, setCurrentUser] = useState(null)
+  const [authReady, setAuthReady] = useState(false)
 
-  function handleLogin(user) {
-    localStorage.setItem('currentUser', JSON.stringify(user))
-    setCurrentUser(user)
-  }
-  function handleLogout() {
-    localStorage.removeItem('currentUser')
+  useEffect(() => {
+    const toUser = (session) => session?.user
+      ? { id: session.user.id, username: session.user.user_metadata?.username || session.user.email.split('@')[0] }
+      : null
+    supabase.auth.getSession().then(({ data }) => { setCurrentUser(toUser(data.session)); setAuthReady(true) })
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => setCurrentUser(toUser(session)))
+    return () => sub.subscription.unsubscribe()
+  }, [])
+
+  async function handleLogout() {
+    await supabase.auth.signOut()
+    initDone.current = false
     setCurrentUser(null)
   }
 
@@ -2251,7 +2256,8 @@ export default function App() {
     return result
   }, [savedRecipes, recipeSearch, recipeSort, ingredients, selectedTag])
 
-  if (!currentUser) return <LoginScreen onLogin={handleLogin} />
+  if (!authReady) return null
+  if (!currentUser) return <LoginScreen />
 
   if (loading) {
     return (
