@@ -34,6 +34,9 @@ import {
   Wand2,
   BookOpen,
   MoreHorizontal,
+  CalendarDays,
+  CalendarPlus,
+  Package,
 } from 'lucide-react'
 import supabase, { dbGet, dbInsert, dbUpdate, dbDelete } from './supabase.js'
 import { INGREDIENT_CATEGORIES, DEFAULT_INGREDIENTS } from './ingredients.js'
@@ -912,7 +915,7 @@ function ShoppingHistoryModal({ history, onClose }) {
 
 // ─── RecipePostit ─────────────────────────────────────────────────────────────
 
-function RecipePostit({ item, onUpdate, onDelete, onSelect, onOpenDetail, onCart, ingredients = [], savedIds = [], usageCount = 0 }) {
+function RecipePostit({ item, onUpdate, onDelete, onSelect, onOpenDetail, onCart, onPlan, ingredients = [], savedIds = [], usageCount = 0 }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({ id: `recipe-${item.id}` })
   const [editing, setEditing] = useState(!item.name)
   const [draft, setDraft] = useState(item.name)
@@ -1068,6 +1071,9 @@ function RecipePostit({ item, onUpdate, onDelete, onSelect, onOpenDetail, onCart
             title={notesOpen ? 'Cerrar notas' : 'Notas y etiquetas'}
           >
             <Tag size={11} />
+          </button>
+          <button className="postit-btn plan-btn" onPointerDown={(e) => e.stopPropagation()} onClick={() => onPlan?.()} title="Añadir al menú">
+            <CalendarPlus size={12} />
           </button>
           <button
             className={`postit-btn${item.steps ? ' notes-active' : ''}`}
@@ -1352,9 +1358,10 @@ function loadAutoMenuOptions() {
 
 function AutoMenuModal({
   slots, allSlots, poolItems, savedRecipes, ingredients, dishIngMap, allTags, availableIds = [],
-  weekKey, nextWeekKey, startDayOfWeek, onClose, onConfirm, onOpenRecipe,
+  weekKey, nextWeekKey, startDayOfWeek, onClose, onConfirm, onOpenRecipe, hidden = false, tabs = null,
 }) {
   const [opts, setOptsRaw] = useState(loadAutoMenuOptions)
+  const isMobile = useIsMobile()
   const [showOpts, setShowOpts] = useState(false)
   const [sheetKey, setSheetKey] = useState(null)
   const [swapQuery, setSwapQuery] = useState('')
@@ -1533,6 +1540,36 @@ function AutoMenuModal({
     return all.filter((n) => !q || normalizeText(n).includes(q)).sort((a, b) => a.localeCompare(b, 'es')).slice(0, 30)
   }, [swapQuery, poolItems, savedRecipes])
 
+  // Celda de propuesta (día + comida): la comparten la cuadrícula de escritorio y la lista por días del móvil
+  const renderProposalCell = (i, slot) => {
+                  const k = cellKey(i, slot.key)
+                  const entry = proposals[k]
+                  if (!entry) return <div key={k} className="auto-menu-cell empty">—</div>
+                  const cat = entry.isExisting ? null : typeOf(entry.dishName)
+                  const bg = !entry.isExisting ? (CATEGORY_PASTELS[cat] ?? CATEGORY_PASTELS['Otros']) : undefined
+                  return (
+                    <div
+                      key={k}
+                      className={`auto-menu-cell${entry.isExisting ? ' existing' : ' proposed'}${entry.selected ? ' chosen' : ''}${sheetKey === k ? ' open' : ''}`}
+                      style={bg ? { background: bg } : {}}
+                      onClick={() => { setSheetKey(sheetKey === k ? null : k); setSwapping(false) }}
+                      title="Ver la receta"
+                    >
+                      {!entry.isExisting && (
+                        <input
+                          type="checkbox"
+                          className="auto-cell-check"
+                          checked={entry.selected}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={() => toggleSelected(k)}
+                          title="Elegir: se guarda en el menú y no se vuelve a sortear"
+                        />
+                      )}
+                      <span>{titleCase(entry.dishName)}</span>
+                    </div>
+                  )
+  }
+
   const sheet = sheetKey ? proposals[sheetKey] : null
   const sheetRecipe = sheet ? recipeByName.get(sheet.dishName.trim().toLowerCase()) : null
   const sheetIngredients = sheet
@@ -1541,10 +1578,10 @@ function AutoMenuModal({
   const sheetType = sheet ? typeOf(sheet.dishName) : null
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" style={hidden ? { display: 'none' } : undefined} onClick={onClose}>
       <div className="modal auto-menu-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Sugerencia de semana</h2>
+          {tabs || <h2>Sugerencia de semana</h2>}
           <button className="modal-close" onClick={onClose}><X size={16} /></button>
         </div>
         <div className="modal-body">
@@ -1664,6 +1701,24 @@ function AutoMenuModal({
             </div>
           )}
 
+          {isMobile ? (
+            <div className="auto-days">
+              {Array.from({ length: 7 }, (_, i) => (
+                <div key={i} className="auto-day-row">
+                  <div className="auto-day-label">
+                    <strong>{DAYS[(startDayOfWeek + i) % 7].slice(0, 3)}</strong>
+                    <span>{getDayDate(weekKey, startDayOfWeek + i).getDate()}</span>
+                  </div>
+                  {SLOTS.map((slot) => (
+                    <div key={slot.key} className="auto-day-cell">
+                      <span className="auto-day-slot">{slot.label}</span>
+                      {renderProposalCell(i, slot)}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          ) : (
           <div className="auto-menu-grid">
             <div className="auto-menu-corner" />
             {Array.from({ length: 7 }, (_, i) => (
@@ -1674,37 +1729,11 @@ function AutoMenuModal({
             {SLOTS.map((slot) => (
               <React.Fragment key={slot.key}>
                 <div className="auto-menu-row-label">{slot.label}</div>
-                {Array.from({ length: 7 }, (_, i) => {
-                  const k = cellKey(i, slot.key)
-                  const entry = proposals[k]
-                  if (!entry) return <div key={k} className="auto-menu-cell empty">—</div>
-                  const cat = entry.isExisting ? null : typeOf(entry.dishName)
-                  const bg = !entry.isExisting ? (CATEGORY_PASTELS[cat] ?? CATEGORY_PASTELS['Otros']) : undefined
-                  return (
-                    <div
-                      key={k}
-                      className={`auto-menu-cell${entry.isExisting ? ' existing' : ' proposed'}${entry.selected ? ' chosen' : ''}${sheetKey === k ? ' open' : ''}`}
-                      style={bg ? { background: bg } : {}}
-                      onClick={() => { setSheetKey(sheetKey === k ? null : k); setSwapping(false) }}
-                      title="Ver la receta"
-                    >
-                      {!entry.isExisting && (
-                        <input
-                          type="checkbox"
-                          className="auto-cell-check"
-                          checked={entry.selected}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={() => toggleSelected(k)}
-                          title="Elegir: se guarda en el menú y no se vuelve a sortear"
-                        />
-                      )}
-                      <span>{titleCase(entry.dishName)}</span>
-                    </div>
-                  )
-                })}
+                {Array.from({ length: 7 }, (_, i) => renderProposalCell(i, slot))}
               </React.Fragment>
             ))}
           </div>
+          )}
 
           {entries.length === 0 && (
             <p className="auto-menu-empty">No hay platos con estos ajustes. Añade platos a la despensa o a las recetas, o relaja los filtros.</p>
@@ -1929,7 +1958,7 @@ function PantryIngredientChip({ item, ingredient, onEdit, onDelete }) {
 
 // ─── PoolPostit ───────────────────────────────────────────────────────────────
 
-function PoolPostit({ item, ingredients, onUpdate, onDelete, onContextMenu, onEditDetails, typeOverride = null, savedIds = [] }) {
+function PoolPostit({ item, ingredients, onUpdate, onDelete, onContextMenu, onEditDetails, onPlan, typeOverride = null, savedIds = [] }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({ id: `pool-${item.id}` })
   const [editing, setEditing] = useState(!item.dish_name)
   const [draft, setDraft] = useState(item.dish_name)
@@ -1994,6 +2023,9 @@ function PoolPostit({ item, ingredients, onUpdate, onDelete, onContextMenu, onEd
             {PANTRY_LOCATIONS.find((l) => l.key === item.location)?.emoji} {item.note}
           </span>
         ) : <div />}
+        <button className="postit-btn plan-btn" onPointerDown={(e) => e.stopPropagation()} onClick={() => onPlan?.()} title="Añadir al menú">
+          <CalendarPlus size={14} />
+        </button>
         <div ref={setActivatorNodeRef} {...listeners} {...attributes} className="drag-handle" title="Arrastrar al tablero">
           <GripVertical size={12} />
         </div>
@@ -2207,7 +2239,7 @@ const AI_PRESETS = [
 
 const LIGHT_LABELS = { ligero: '🥗 Ligero', equilibrado: '⚖️ Equilibrado', contundente: '🍖 Contundente' }
 
-function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClose, onAdd }) {
+function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClose, onAdd, hidden = false, tabs = null }) {
   const [step, setStep] = useState('form') // 'form' | 'list'
   const [prefs, setPrefs] = useState(AI_DEFAULT_PREFS)
   const [showIngredients, setShowIngredients] = useState(false)
@@ -2274,10 +2306,10 @@ function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClo
   )
 
   return (
-    <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="modal-backdrop" style={hidden ? { display: 'none' } : undefined} onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <div className="modal-header">
-          <h3>💡 Propuestas IA</h3>
+          {tabs || <h3>💡 Propuestas IA</h3>}
           <button className="modal-close" onClick={onClose}><X size={18} /></button>
         </div>
         <div className="modal-body">
@@ -2420,6 +2452,78 @@ function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClo
   )
 }
 
+// ─── Asistente (menú de la semana + ideas de recetas) ─────────────────────────
+
+function AssistantTabs({ active, onChange }) {
+  return (
+    <div className="assistant-tabs" role="tablist">
+      <button role="tab" aria-selected={active === 'menu'} className={active === 'menu' ? 'active' : ''} onClick={() => onChange('menu')}>
+        📅 Menú de la semana
+      </button>
+      <button role="tab" aria-selected={active === 'ideas'} className={active === 'ideas' ? 'active' : ''} onClick={() => onChange('ideas')}>
+        💡 Ideas de recetas
+      </button>
+    </div>
+  )
+}
+
+// ─── Móvil ────────────────────────────────────────────────────────────────────
+
+function useIsMobile(query = '(max-width: 768px)') {
+  const [match, setMatch] = useState(() => window.matchMedia(query).matches)
+  useEffect(() => {
+    const mq = window.matchMedia(query)
+    const onChange = (e) => setMatch(e.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [query])
+  return match
+}
+
+// Elige día y comida sin arrastrar (en el móvil no se puede arrastrar entre pantallas)
+function PlanPicker({ title, startDayOfWeek, weekKey, initialDay = 0, onClose, onPick }) {
+  const [day, setDay] = useState(initialDay)
+  const [slotKey, setSlotKey] = useState('lunch')
+  return (
+    <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal plan-picker">
+        <div className="modal-header">
+          <h3>{title}</h3>
+          <button className="modal-close" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body">
+          <div className="form-field">
+            <label className="form-label">Día</label>
+            <div className="plan-days">
+              {Array.from({ length: 7 }, (_, i) => {
+                const date = getDayDate(weekKey, startDayOfWeek + i)
+                return (
+                  <button key={i} className={`plan-day${day === i ? ' selected' : ''}${isToday(date) ? ' today' : ''}`} onClick={() => setDay(i)}>
+                    <span>{DAYS[(startDayOfWeek + i) % 7].slice(0, 3)}</span>
+                    <strong>{date.getDate()}</strong>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+          <div className="form-field">
+            <label className="form-label">Comida</label>
+            <div className="type-selector">
+              {SLOTS.map((sl) => (
+                <button key={sl.key} className={`type-btn${slotKey === sl.key ? ' selected' : ''}`} onClick={() => setSlotKey(sl.key)}>{sl.label}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" onClick={() => onPick(day, slotKey)}>Elegir</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -2471,7 +2575,6 @@ export default function App() {
   const [customInput, setCustomInput] = useState('')
   const [poolItems, setPoolItems] = useState([])
   const [savedRecipes, setSavedRecipes] = useState([])
-  const [aiProposalsOpen, setAiProposalsOpen] = useState(false)
 
   // ─── DB-backed mutations (writes broadcast via Supabase realtime) ──────────
   async function reloadPool() {
@@ -2609,14 +2712,21 @@ export default function App() {
   const [recipeSearch, setRecipeSearch] = useState('')
   const [recipeSort, setRecipeSort] = useState('recent')
   const [selectedTag, setSelectedTag] = useState(null)
-  const [autoMenuOpen, setAutoMenuOpen] = useState(false)
+  const [assistant, setAssistant] = useState(null) // null | 'menu' | 'ideas'
   const [recipeReverse, setRecipeReverse] = useState(false)
   const [recipeFilters, setRecipeFilters] = useState({ maxTime: null, light: false, few: false, types: [] })
+  const [recipeFiltersOpen, setRecipeFiltersOpen] = useState(false)
   const [dishIngMap, setDishIngMap] = useState({})
   const [recipeDetailId, setRecipeDetailId] = useState(null)
   const [cartRecipeId, setCartRecipeId] = useState(null)
   const [cartIdsOverride, setCartIdsOverride] = useState(null)
   const [pantryModal, setPantryModal] = useState(null) // { mode: 'dish' | 'ingredient', item? }
+  const isMobile = useIsMobile()
+  const [mobileTab, setMobileTab] = useState('menu') // 'menu' | 'tray'
+  const [mobileDay, setMobileDay] = useState(null)   // columna visible en la vista de un día
+  const [planPicker, setPlanPicker] = useState(null) // { mode: 'recipe' | 'pool' | 'move' | 'copy', ... }
+  const swipe = useRef(null)
+  useEffect(() => { setMobileDay(null) }, [weekKey, startDayOfWeek])
 
   // La despensa mezcla platos e ingredientes disponibles
   const poolDishes = useMemo(() => poolItems.filter((p) => (p.kind || 'dish') === 'dish'), [poolItems])
@@ -2895,13 +3005,14 @@ export default function App() {
     }
   }
 
-  async function handleCopySlot(dayIdx, slotKey) {
-    if (!copyingSlot) return
+  async function handleCopySlot(dayIdx, slotKey, slotArg) {
+    const src = slotArg || copyingSlot
+    if (!src) return
     try {
       await handleSaveDish({
-        dishName: copyingSlot.dish_name,
-        effort: copyingSlot.effort_override || 1,
-        selectedIds: copyingSlot.ingredient_ids || [],
+        dishName: src.dish_name,
+        effort: src.effort_override || 1,
+        selectedIds: src.ingredient_ids || [],
         slot: null,
         dayIdx,
         slotKey,
@@ -2913,23 +3024,24 @@ export default function App() {
     }
   }
 
-  async function handleMoveSlot(dayIdx, slotKey) {
-    if (!movingSlot) return
+  async function handleMoveSlot(dayIdx, slotKey, slotArg) {
+    const src = slotArg || movingSlot
+    if (!src) return
     try {
-      if (movingSlot.isPool) {
-        await handleSaveDish({ dishName: movingSlot.dish_name, effort: 1, selectedIds: null, dayIdx, slotKey })
-        deletePoolItem(movingSlot.id)
+      if (src.isPool) {
+        await handleSaveDish({ dishName: src.dish_name, effort: 1, selectedIds: null, dayIdx, slotKey })
+        deletePoolItem(src.id)
       } else {
         const absIdx = (startDayOfWeek + dayIdx) % 7
         const colWk = startDayOfWeek + dayIdx >= 7 ? nextWeekKey : weekKey
-        await dbUpdate('v2_board_slots', movingSlot.id, {
+        await dbUpdate('v2_board_slots', src.id, {
           week_key: colWk,
           day_idx: absIdx,
           slot_key: slotKey,
           position: Date.now(),
         })
         setSlots((prev) => prev.map((s) =>
-          s.id === movingSlot.id ? { ...s, week_key: colWk, day_idx: absIdx, slot_key: slotKey } : s
+          s.id === src.id ? { ...s, week_key: colWk, day_idx: absIdx, slot_key: slotKey } : s
         ))
       }
       setMovingSlot(null)
@@ -3023,6 +3135,28 @@ export default function App() {
     showToast(`"${titleCase(name)}" añadida a recetas`)
   }
 
+  // Colocar un plato en un día/comida eligiéndolo en una lista (alternativa al arrastre, sobre todo en el móvil)
+  async function handlePlanPick(day, slotKey) {
+    const pk = planPicker
+    setPlanPicker(null)
+    if (!pk) return
+    setMobileDay(day)
+    try {
+      if (pk.mode === 'recipe') {
+        setAddModal({ dayIdx: day, slotKey, initialName: pk.name })
+      } else if (pk.mode === 'pool') {
+        await handleSaveDish({ dishName: pk.item.dish_name, effort: pk.item.effort || 1, selectedIds: null, dayIdx: day, slotKey })
+        showToast(`"${titleCase(pk.item.dish_name)}" añadido al menú`)
+      } else if (pk.mode === 'move') {
+        await handleMoveSlot(day, slotKey, pk.slot)
+      } else if (pk.mode === 'copy') {
+        await handleCopySlot(day, slotKey, pk.slot)
+      }
+    } catch (e) {
+      showToast('Error: ' + e.message)
+    }
+  }
+
   function handleRecipeToCart(selected, recipeName) {
     for (const ing of selected) addCustomItemRow({ name: ing.name, category: ing.category || 'Otros', source: recipeName })
     setCartRecipeId(null)
@@ -3030,7 +3164,7 @@ export default function App() {
   }
 
   async function handleAutoMenuConfirm(proposals) {
-    setAutoMenuOpen(false)
+    setAssistant(null)
     for (const p of proposals) {
       try {
         await handleSaveDish({ dishName: p.dishName, effort: 1, selectedIds: null, dayIdx: p.displayDay, slotKey: p.slotKey })
@@ -3279,6 +3413,7 @@ export default function App() {
     }
     return { ...m, ...colorOverrides }
   }, [slots, recipeTypeByName, colorOverrides])
+  const activeFilterCount = (selectedTag ? 1 : 0) + (recipeFilters.maxTime ? 1 : 0) + (recipeFilters.light ? 1 : 0) + (recipeFilters.few ? 1 : 0) + recipeFilters.types.length
   const dietWarnings = useMemo(() => getDietWarnings(slots, ingredients, effectiveOverrides, startDayOfWeek, weekKey, nextWeekKey), [slots, ingredients, effectiveOverrides, startDayOfWeek, weekKey, nextWeekKey])
 
   const recipeUsageCount = useMemo(() => {
@@ -3352,88 +3487,11 @@ export default function App() {
     )
   }
 
-  return (
-    <div className="app">
-      <header className="app-header">
-        <h1><img src="/icons/logo.png" alt="" className="app-logo" /> Pizarra Semanal</h1>
-        <div className="week-nav">
-          <button onClick={() => setWeekOffset((w) => w - 1)} title="7 días atrás">
-            <ChevronLeft size={16} />
-          </button>
-          <span>{formatWeekRange(weekKey, startDayOfWeek)}</span>
-          <button onClick={() => setWeekOffset((w) => w + 1)} title="7 días adelante">
-            <ChevronRight size={16} />
-          </button>
-          {weekOffset !== 0 && (
-            <button className="btn-today" onClick={() => setWeekOffset(0)}>
-              Hoy
-            </button>
-          )}
-        </div>
-        <div className="start-day-picker">
-          <span className="start-day-label">Empieza el</span>
-          {['L', 'M', 'X', 'J', 'V', 'S', 'D'].map((abbr, i) => (
-            <button
-              key={i}
-              className={`start-day-btn${startDayOfWeek === i ? ' active' : ''}`}
-              onClick={() => { setStartDayOfWeek(i); setWeekOffset(0) }}
-              title={DAYS[i]}
-            >
-              {abbr}
-            </button>
-          ))}
-        </div>
-        <button className="logout-btn" onClick={handleLogout} title={`Cerrar sesión (${currentUser.username})`}>
-          <LogOut size={14} />
-          <span className="logout-name">{currentUser.username}</span>
-        </button>
-      </header>
+  const todayCol = Array.from({ length: 7 }, (_, i) => i).find((i) => isToday(getDayDate(weekKey, startDayOfWeek + i))) ?? -1
+  const selectedDay = mobileDay ?? (todayCol >= 0 ? todayCol : 0)
 
-      <div className="app-body">
-        <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-        <div className="app-main">
-        <div className="board-wrapper">
-          {(copyingSlot || movingSlot) && (
-            <div className="copy-banner">
-              {movingSlot ? <ChevronRight size={14} /> : <Copy size={14} />}
-              {movingSlot
-                ? <>Moviendo <strong>{movingSlot.dish_name}</strong> — elige destino</>
-                : <>Copiando <strong>{copyingSlot.dish_name}</strong> — elige dónde pegar</>
-              }
-              <button onClick={() => { setCopyingSlot(null); setMovingSlot(null) }}><X size={13} /></button>
-            </div>
-          )}
-          {dietWarnings.length > 0 && (
-            <div className="diet-warnings">
-              {dietWarnings.map((w, i) => (
-                <div key={i} className="diet-warning">
-                  ⚠️ <strong>{w.category}</strong> varios días seguidos: {w.days.join(', ')}
-                </div>
-              ))}
-            </div>
-          )}
-            <div className="board">
-              <div className="board-header-empty" />
-              {DAYS.map((_, i) => {
-                const date = getDayDate(weekKey, startDayOfWeek + i)
-                const name = DAYS[(startDayOfWeek + i) % 7]
-                return (
-                  <div
-                    key={i}
-                    className={`board-day-header${isToday(date) ? ' today' : ''}`}
-                  >
-                    <div className="day-name">{name}</div>
-                    <div className="day-date">
-                      {date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
-                    </div>
-                  </div>
-                )
-              })}
-
-              {SLOTS.map((slot) => (
-                <React.Fragment key={slot.key}>
-                  <div className="board-slot-label">{slot.label}</div>
-                  {DAYS.map((_, i) => {
+  // Celda (día + comida) del tablero: la usan la cuadrícula de escritorio y la vista de un día del móvil
+  const renderCell = (i, slot) => {
                     const absIdx = (startDayOfWeek + i) % 7
                     const colWk = startDayOfWeek + i >= 7 ? nextWeekKey : weekKey
                     const cellId = `${i}-${slot.key}`
@@ -3473,12 +3531,163 @@ export default function App() {
                         </div>
                       </DroppableCell>
                     )
+  }
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <h1><img src="/icons/logo.png" alt="" className="app-logo" /> Pizarra Semanal</h1>
+        <div className="week-nav">
+          <button onClick={() => setWeekOffset((w) => w - 1)} title="7 días atrás">
+            <ChevronLeft size={16} />
+          </button>
+          <span>{formatWeekRange(weekKey, startDayOfWeek)}</span>
+          <button onClick={() => setWeekOffset((w) => w + 1)} title="7 días adelante">
+            <ChevronRight size={16} />
+          </button>
+          {weekOffset !== 0 && (
+            <button className="btn-today" onClick={() => setWeekOffset(0)}>
+              Hoy
+            </button>
+          )}
+        </div>
+        <div className="start-day-picker">
+          <span className="start-day-label">Empieza el</span>
+          {['L', 'M', 'X', 'J', 'V', 'S', 'D'].map((abbr, i) => (
+            <button
+              key={i}
+              className={`start-day-btn${startDayOfWeek === i ? ' active' : ''}`}
+              onClick={() => { setStartDayOfWeek(i); setWeekOffset(0) }}
+              title={DAYS[i]}
+            >
+              {abbr}
+            </button>
+          ))}
+        </div>
+        <select
+          className="start-day-select"
+          value={startDayOfWeek}
+          onChange={(e) => { setStartDayOfWeek(Number(e.target.value)); setWeekOffset(0) }}
+          aria-label="Día en que empieza la semana"
+        >
+          {DAYS.map((d, i) => <option key={i} value={i}>Empieza: {d}</option>)}
+        </select>
+        <button className="logout-btn" onClick={handleLogout} title={`Cerrar sesión (${currentUser.username})`}>
+          <LogOut size={14} />
+          <span className="logout-name">{currentUser.username}</span>
+        </button>
+      </header>
+
+      <div className="app-body">
+        <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <div className="app-main" data-mtab={isMobile ? mobileTab : 'desktop'}>
+        <div className="board-wrapper">
+          {(copyingSlot || movingSlot) && (
+            <div className="copy-banner">
+              {movingSlot ? <ChevronRight size={14} /> : <Copy size={14} />}
+              {movingSlot
+                ? <>Moviendo <strong>{movingSlot.dish_name}</strong> — elige destino</>
+                : <>Copiando <strong>{copyingSlot.dish_name}</strong> — elige dónde pegar</>
+              }
+              <button onClick={() => { setCopyingSlot(null); setMovingSlot(null) }}><X size={13} /></button>
+            </div>
+          )}
+          {dietWarnings.length > 0 && (isMobile ? (
+            <details className="diet-warnings diet-warnings-mobile">
+              <summary>⚠️ Variedad: {dietWarnings.length} aviso{dietWarnings.length !== 1 ? 's' : ''}</summary>
+              {dietWarnings.map((w, i) => (
+                <div key={i} className="diet-warning">
+                  <strong>{w.category}</strong> varios días seguidos: {w.days.join(', ')}
+                </div>
+              ))}
+            </details>
+          ) : (
+            <div className="diet-warnings">
+              {dietWarnings.map((w, i) => (
+                <div key={i} className="diet-warning">
+                  ⚠️ <strong>{w.category}</strong> varios días seguidos: {w.days.join(', ')}
+                </div>
+              ))}
+            </div>
+          ))}
+            {isMobile ? (
+              <div
+                className="mobile-day"
+                onTouchStart={(e) => { swipe.current = { x: e.touches[0].clientX, y: e.touches[0].clientY } }}
+                onTouchEnd={(e) => {
+                  const st = swipe.current
+                  if (!st) return
+                  const dx = e.changedTouches[0].clientX - st.x
+                  const dy = e.changedTouches[0].clientY - st.y
+                  if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.6) {
+                    setMobileDay(Math.max(0, Math.min(6, selectedDay + (dx < 0 ? 1 : -1))))
+                  }
+                }}
+              >
+                <div className="day-strip">
+                  {DAYS.map((_, i) => {
+                    const date = getDayDate(weekKey, startDayOfWeek + i)
+                    const absIdx = (startDayOfWeek + i) % 7
+                    const colWk = startDayOfWeek + i >= 7 ? nextWeekKey : weekKey
+                    const count = slots.filter((x) => x.day_idx === absIdx && x.week_key === colWk).length
+                    return (
+                      <button
+                        key={i}
+                        className={`day-chip${selectedDay === i ? ' selected' : ''}${isToday(date) ? ' today' : ''}`}
+                        onClick={() => setMobileDay(i)}
+                      >
+                        <span className="day-chip-name">{DAYS[(startDayOfWeek + i) % 7].slice(0, 3)}</span>
+                        <span className="day-chip-date">{date.getDate()}</span>
+                        <span className="day-chip-dots">{count > 0 ? '●'.repeat(Math.min(count, 4)) : '\u00a0'}</span>
+                      </button>
+                    )
                   })}
+                </div>
+                <div className="mobile-day-title">
+                  <span>
+                    {DAYS[(startDayOfWeek + selectedDay) % 7]}{' '}
+                    {getDayDate(weekKey, startDayOfWeek + selectedDay).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}
+                  </span>
+                  <button className="mobile-assistant-btn" onClick={() => setAssistant('menu')}>
+                    <Sparkles size={14} /> Asistente
+                  </button>
+                </div>
+                {SLOTS.map((slot) => (
+                  <section key={slot.key} className="mobile-slot">
+                    <h4 className="mobile-slot-title">{slot.label}</h4>
+                    {renderCell(selectedDay, slot)}
+                  </section>
+                ))}
+              </div>
+            ) : (
+            <div className="board">
+              <div className="board-header-empty" />
+              {DAYS.map((_, i) => {
+                const date = getDayDate(weekKey, startDayOfWeek + i)
+                const name = DAYS[(startDayOfWeek + i) % 7]
+                return (
+                  <div
+                    key={i}
+                    className={`board-day-header${isToday(date) ? ' today' : ''}`}
+                  >
+                    <div className="day-name">{name}</div>
+                    <div className="day-date">
+                      {date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
+                    </div>
+                  </div>
+                )
+              })}
+
+              {SLOTS.map((slot) => (
+                <React.Fragment key={slot.key}>
+                  <div className="board-slot-label">{slot.label}</div>
+                  {DAYS.map((_, i) => renderCell(i, slot))}
                 </React.Fragment>
               ))}
             </div>
-
-            <DragOverlay dropAnimation={null}>
+            )}
+        </div>{/* /board-wrapper */}
+        <DragOverlay dropAnimation={null}>
               {activeId && (() => {
                 if (String(activeId).startsWith('pool-')) {
                   const p = poolItems.find((x) => x.id === String(activeId).replace('pool-', ''))
@@ -3503,7 +3712,6 @@ export default function App() {
                 return <div className="postit-overlay" style={{ background: bg }}><span className="postit-name">{titleCase(s.dish_name)}</span></div>
               })()}
             </DragOverlay>
-        </div>{/* /board-wrapper */}
 
         <div className="dishes-tray">
           <div className="tray-tabs">
@@ -3528,11 +3736,8 @@ export default function App() {
                 <button className="btn-add-slot tray-add-btn" onClick={() => addRecipe('')}>
                   <Plus size={11} /> Receta
                 </button>
-                <button className="btn-add-slot tray-add-btn tray-ai-btn" onClick={() => setAiProposalsOpen(true)}>
-                  <Lightbulb size={11} /> IA
-                </button>
-                <button className="btn-add-slot tray-add-btn" onClick={() => setAutoMenuOpen(true)} title="Sugerir semana automáticamente">
-                  <Wand2 size={11} /> Sugerir
+                <button className="btn-add-slot tray-add-btn tray-ai-btn" onClick={() => setAssistant('menu')} title="Sugerir el menú de la semana o buscar ideas de recetas con IA">
+                  <Sparkles size={11} /> Asistente
                 </button>
               </>
             )}
@@ -3568,6 +3773,7 @@ export default function App() {
                       onUpdate={(updated) => updatePoolItem(item.id, { dish_name: updated.dish_name })}
                       onDelete={() => deletePoolItem(item.id)}
                       onEditDetails={() => setPantryModal({ mode: 'dish', item })}
+                      onPlan={() => setPlanPicker({ mode: 'pool', item })}
                       onContextMenu={(e, slot) => setContextMenu({ x: e.clientX, y: e.clientY, slot, isPool: true })}
                     />
                   ))}
@@ -3599,6 +3805,7 @@ export default function App() {
               <div className="tray-tab-content">
                 {savedRecipes.length > 0 && (
                   <div className="recipe-controls">
+                    <div className={`recipe-filters-box${recipeFiltersOpen ? ' open' : ''}`}>
                     {allTags.length > 0 && (
                       <div className="tag-filter-chips">
                         {allTags.map((tag) => (
@@ -3629,12 +3836,18 @@ export default function App() {
                         <button className="tag-filter-chip" onClick={() => setRecipeFilters({ maxTime: null, light: false, few: false, types: [] })}>✕ Limpiar</button>
                       )}
                     </div>
-                    <input
-                      className="recipe-search-input"
-                      placeholder="Buscar receta…"
-                      value={recipeSearch}
-                      onChange={(e) => setRecipeSearch(e.target.value)}
-                    />
+                    </div>
+                    <div className="recipe-search-row">
+                      <input
+                        className="recipe-search-input"
+                        placeholder="Buscar receta…"
+                        value={recipeSearch}
+                        onChange={(e) => setRecipeSearch(e.target.value)}
+                      />
+                      <button className={`recipe-filters-toggle${recipeFiltersOpen ? ' active' : ''}`} onClick={() => setRecipeFiltersOpen((v) => !v)}>
+                        ⚙ Filtros{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
+                      </button>
+                    </div>
                     <div className="recipe-sort-btns">
                       {[['recent', 'Recientes'], ['az', 'A–Z'], ['category', 'Categoría'], ['rating', '⭐ Valoración']].map(([key, label]) => (
                         <button key={key} className={`recipe-sort-btn${recipeSort === key ? ' active' : ''}`} onClick={() => setRecipeSort(key)}>{label}</button>
@@ -3661,6 +3874,7 @@ export default function App() {
                       savedIds={savedIngredientIds(dishIngMap, recipe.name)}
                       usageCount={recipeUsageCount[recipe.name?.toLowerCase()] || 0}
                       onOpenDetail={() => setRecipeDetailId(recipe.id)}
+                      onPlan={() => setPlanPicker({ mode: 'recipe', name: recipe.name })}
                       onCart={() => setCartRecipeId(recipe.id)}
                       onSelect={() => { if (recipe.name) { setPendingRecipeName(recipe.name); setTrayTab('pool') } }}
                       onUpdate={(patch) => updateRecipe(recipe.id, patch)}
@@ -3802,10 +4016,23 @@ export default function App() {
         </DndContext>
       </div>{/* /app-body */}
 
-      <button className="fab" onClick={() => setShoppingOpen(true)} title="Lista de la compra">
-        <ShoppingCart size={22} />
-        {totalItems > 0 && <span className="fab-badge">{totalItems}</span>}
-      </button>
+      {isMobile && (
+        <nav className="mobile-nav">
+          <button className={mobileTab === 'menu' && !shoppingOpen ? 'active' : ''} onClick={() => { setMobileTab('menu'); setShoppingOpen(false) }}>
+            <CalendarDays size={20} /><span>Menú</span>
+          </button>
+          <button className={mobileTab === 'tray' && trayTab === 'pool' && !shoppingOpen ? 'active' : ''} onClick={() => { setMobileTab('tray'); setTrayTab('pool'); setShoppingOpen(false) }}>
+            <Package size={20} /><span>Despensa</span>
+          </button>
+          <button className={mobileTab === 'tray' && trayTab === 'recipes' && !shoppingOpen ? 'active' : ''} onClick={() => { setMobileTab('tray'); setTrayTab('recipes'); setShoppingOpen(false) }}>
+            <BookOpen size={20} /><span>Recetas</span>
+          </button>
+          <button className={shoppingOpen ? 'active' : ''} onClick={() => setShoppingOpen(true)}>
+            <span className="mobile-nav-icon"><ShoppingCart size={20} />{totalItems > 0 && <span className="fab-badge">{totalItems}</span>}</span>
+            <span>Compra</span>
+          </button>
+        </nav>
+      )}
 
       {addModal && (
         <DishModal
@@ -3858,8 +4085,8 @@ export default function App() {
           onEdit={(slot) => setEditModal(slot)}
           onDelete={(slot) => handleDelete(slot.id)}
           onRecipe={(slot) => setRecipeModal(slot)}
-          onCopy={(slot) => { setCopyingSlot(slot); setMovingSlot(null); showToast(`Copiando "${titleCase(slot.dish_name)}" — elige dónde pegar`) }}
-          onMove={(slot) => { setMovingSlot(slot); setCopyingSlot(null); showToast(`Moviendo "${titleCase(slot.dish_name)}" — elige destino`) }}
+          onCopy={(slot) => { if (isMobile) { setPlanPicker({ mode: 'copy', slot }); return } setCopyingSlot(slot); setMovingSlot(null); showToast(`Copiando "${titleCase(slot.dish_name)}" — elige dónde pegar`) }}
+          onMove={(slot) => { if (isMobile) { setPlanPicker({ mode: 'move', slot }); return } setMovingSlot(slot); setCopyingSlot(null); showToast(`Moviendo "${titleCase(slot.dish_name)}" — elige destino`) }}
           onSendToPool={(slot) => {
             addPoolItem({ dish_name: slot.dish_name })
             handleDelete(slot.id)
@@ -3874,13 +4101,27 @@ export default function App() {
         <RecipeModal slot={recipeModal} onClose={() => setRecipeModal(null)} />
       )}
 
-      {aiProposalsOpen && (
+      {/* Asistente: las dos pestañas siguen montadas para no perder lo generado al cambiar de una a otra */}
+      {assistant && (
         <AIRecipeProposalsModal
+          hidden={assistant !== 'ideas'}
+          tabs={<AssistantTabs active={assistant} onChange={setAssistant} />}
           savedRecipes={savedRecipes}
           ingredients={ingredients}
           availableIds={pantryIngredients.map((p) => p.ingredient_id).filter(Boolean)}
-          onClose={() => setAiProposalsOpen(false)}
+          onClose={() => setAssistant(null)}
           onAdd={handleAddProposal}
+        />
+      )}
+
+      {planPicker && (
+        <PlanPicker
+          title={planPicker.mode === 'move' ? 'Mover a…' : planPicker.mode === 'copy' ? 'Copiar a…' : 'Añadir al menú'}
+          startDayOfWeek={startDayOfWeek}
+          weekKey={weekKey}
+          initialDay={selectedDay}
+          onClose={() => setPlanPicker(null)}
+          onPick={handlePlanPick}
         />
       )}
 
@@ -3896,8 +4137,10 @@ export default function App() {
       )}
 
       {/* El menú sugerido va antes que el editor de receta para que el editor se abra por encima */}
-      {autoMenuOpen && (
+      {assistant && (
         <AutoMenuModal
+          hidden={assistant !== 'menu'}
+          tabs={<AssistantTabs active={assistant} onChange={setAssistant} />}
           slots={slots}
           allSlots={allSlots}
           poolItems={poolDishes}
@@ -3909,7 +4152,7 @@ export default function App() {
           weekKey={weekKey}
           nextWeekKey={nextWeekKey}
           startDayOfWeek={startDayOfWeek}
-          onClose={() => setAutoMenuOpen(false)}
+          onClose={() => setAssistant(null)}
           onConfirm={handleAutoMenuConfirm}
           onOpenRecipe={openRecipeByName}
         />
