@@ -112,6 +112,11 @@ const MAIN_CATEGORY_ORDER = ['Carnes', 'Pescados y Mariscos', 'Guisos', 'Legumbr
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+// Id único: la hora en milisegundos sola se repite al crear varios elementos en el mismo instante
+function newId() {
+  return Date.now().toString() + Math.floor(Math.random() * 1000).toString().padStart(3, '0')
+}
+
 async function sha256Hex(text) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('')
@@ -2625,7 +2630,7 @@ export default function App() {
     try { setPoolItems(await dbGet('v2_pool_items')) } catch {}
   }
   async function addPoolItem(item) {
-    const row = { id: Date.now().toString(), dish_name: '', effort: 1, ...item }
+    const row = { id: newId(), dish_name: '', effort: 1, ...item }
     setPoolItems((prev) => [...prev, row])
     try { await dbInsert('v2_pool_items', row) } catch { reloadPool() }
   }
@@ -2642,7 +2647,7 @@ export default function App() {
     try { setSavedRecipes(await dbGet('v2_saved_recipes')) } catch {}
   }
   async function addRecipe(name = '') {
-    const row = { id: Date.now().toString(), name }
+    const row = { id: newId(), name }
     setSavedRecipes((prev) => [...prev, row])
     try { await dbInsert('v2_saved_recipes', row) } catch { reloadRecipes() }
     return row.id
@@ -2673,9 +2678,22 @@ export default function App() {
     try { setCustomItems(await dbGet('v2_custom_items', { week_key: weekKey })) } catch {}
   }
   async function addCustomItemRow(item) {
-    const row = { id: Date.now().toString(), week_key: weekKey, ...item }
+    const row = { id: newId(), week_key: weekKey, ...item }
     setCustomItems((prev) => [...prev, row])
     try { await dbInsert('v2_custom_items', row) } catch { reloadCustomItems() }
+  }
+  // Varios artículos a la vez: una sola escritura (así no pueden pisarse entre sí)
+  async function addCustomItemRows(items) {
+    if (!items.length) return
+    const rows = items.map((item) => ({ id: newId(), week_key: weekKey, ...item }))
+    setCustomItems((prev) => [...prev, ...rows])
+    try {
+      const { error } = await supabase.from('v2_custom_items').insert(rows)
+      if (error) throw error
+    } catch (e) {
+      showToast('No se pudieron guardar los artículos: ' + (e.message || 'error'))
+      reloadCustomItems()
+    }
   }
   async function removeCustomItemRow(id) {
     setCustomItems((prev) => prev.filter((i) => i.id !== id))
@@ -3186,7 +3204,7 @@ export default function App() {
     if (existing) {
       await updateRecipe(existing.id, { ...fields, tags: [...new Set([...(existing.tags || []), ...newTags])] })
     } else {
-      const row = { id: Date.now().toString() + Math.floor(Math.random() * 100), name, ...fields, tags: newTags }
+      const row = { id: newId(), name, ...fields, tags: newTags }
       setSavedRecipes((prev) => [...prev, row])
       await dbInsert('v2_saved_recipes', row)
     }
@@ -3217,9 +3235,16 @@ export default function App() {
   }
 
   function handleRecipeToCart(selected, recipeName) {
-    for (const ing of selected) addCustomItemRow({ name: ing.name, category: ing.category || 'Otros', source: recipeName })
+    // No se repiten los que ya están en la lista de extras de esta semana
+    const have = new Set(customItems.map((i) => normalizeText(i.name).trim()))
+    const fresh = selected.filter((ing) => !have.has(normalizeText(ing.name).trim()))
+    addCustomItemRows(fresh.map((ing) => ({ name: ing.name, category: ing.category || 'Otros', source: recipeName })))
     setCartRecipeId(null)
-    showToast(`${selected.length} ingrediente${selected.length !== 1 ? 's' : ''} añadido${selected.length !== 1 ? 's' : ''} a la compra`)
+    const skipped = selected.length - fresh.length
+    showToast(
+      `${fresh.length} ingrediente${fresh.length !== 1 ? 's' : ''} añadido${fresh.length !== 1 ? 's' : ''} a la compra` +
+      (skipped ? ` (${skipped} ya estaba${skipped !== 1 ? 'n' : ''})` : '')
+    )
   }
 
   async function handleAutoMenuConfirm(proposals) {
