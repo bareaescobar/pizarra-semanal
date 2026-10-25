@@ -8,6 +8,8 @@ import {
   useSensors,
   useDroppable,
   useDraggable,
+  pointerWithin,
+  rectIntersection,
 } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import {
@@ -37,9 +39,17 @@ import {
   CalendarDays,
   CalendarPlus,
   Package,
+  Settings,
 } from 'lucide-react'
 import supabase, { dbGet, dbInsert, dbUpdate, dbDelete } from './supabase.js'
 import { INGREDIENT_CATEGORIES, DEFAULT_INGREDIENTS } from './ingredients.js'
+
+// El destino de un arrastre lo decide dónde está el cursor (las tarjetas del panel son anchas y por solape
+// de rectángulos se caía en la celda equivocada); si el cursor no está sobre ninguna, se usa el solape.
+function collisionByPointer(args) {
+  const hits = pointerWithin(args)
+  return hits.length ? hits : rectIntersection(args)
+}
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -48,6 +58,7 @@ const SLOTS = [
   { key: 'lunch', label: 'Comida' },
   { key: 'dinner', label: 'Cena' },
 ]
+const EFFORT_NAMES = { 1: 'Fácil', 2: 'Medio', 3: 'Casero' }
 const EFFORT_LABELS = { 1: '🟢 Fácil', 2: '🟡 Medio', 3: '🔴 Casero' }
 
 const CATEGORY_COLORS = {
@@ -122,11 +133,11 @@ async function sha256Hex(text) {
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+// Frase: solo la primera letra en mayúscula ("Merluza al horno")
 function titleCase(str) {
   if (!str) return ''
-  return String(str)
-    .toLocaleLowerCase('es')
-    .replace(/(^|\s|[-/])([\p{L}])/gu, (_, sep, ch) => sep + ch.toLocaleUpperCase('es'))
+  const t = String(str).trim().toLocaleLowerCase('es')
+  return t.charAt(0).toLocaleUpperCase('es') + t.slice(1)
 }
 
 // startDayOfWeek: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
@@ -447,11 +458,7 @@ function PostitContent({ slot, onEdit, onDelete, onOpen, onMenu, dragHandleRef, 
         </div>
       </div>
       <div className="postit-footer">
-        <div className="effort-dots">
-          {[1, 2, 3].map((n) => (
-            <div key={n} className={`effort-dot${n <= effort ? ` active-${effort}` : ''}`} />
-          ))}
-        </div>
+        <span className={`effort-pill effort-${effort}`} title="Nivel de esfuerzo">{EFFORT_NAMES[effort] || 'Fácil'}</span>
         {onMenu && (
           <button
             className="postit-btn postit-more-touch"
@@ -2835,7 +2842,28 @@ export default function App() {
     } catch { reloadColorOverrides() }
   }
 
-  const [trayTab, setTrayTab] = useState('pool')
+  const [trayTab, setTrayTab] = useState(() => { try { const v = localStorage.getItem('panelTab'); return v === 'recipes' ? 'recipes' : 'pool' } catch { return 'pool' } })
+  // Panel derecho (escritorio): pestañas Compra / Despensa / Recetas, plegable; se recuerda lo último que se usó
+  const [panelOpen, setPanelOpen] = useState(() => { try { const v = localStorage.getItem('panelOpen'); return v === null ? window.innerWidth >= 1300 : v === '1' } catch { return true } })
+  const setPanelOpenPersist = (v) => { setPanelOpen(v); try { localStorage.setItem('panelOpen', v ? '1' : '0') } catch {} }
+  const [panelTab, setPanelTabRaw] = useState(() => { try { const v = localStorage.getItem('panelTab'); return ['shop', 'pool', 'recipes'].includes(v) ? v : 'shop' } catch { return 'shop' } })
+  const choosePanelTab = (tab) => {
+    setPanelTabRaw(tab)
+    if (tab !== 'shop') setTrayTab(tab)
+    setPanelOpenPersist(true)
+    try { localStorage.setItem('panelTab', tab) } catch {}
+  }
+  // Si otra parte de la app cambia la pestaña de la bandeja (p. ej. al arrastrar a recetas), el panel la sigue
+  useEffect(() => {
+    if (panelTab !== 'shop' && panelTab !== trayTab) setPanelTabRaw(trayTab)
+  }, [trayTab]) // eslint-disable-line react-hooks/exhaustive-deps
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  useEffect(() => {
+    if (!settingsOpen) return
+    const close = (e) => { if (!e.target.closest?.('.settings-wrap')) setSettingsOpen(false) }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [settingsOpen])
   const [pendingRecipeName, setPendingRecipeName] = useState(null)
   const [recipeSearch, setRecipeSearch] = useState('')
   const [recipeSort, setRecipeSort] = useState(() => { try { return localStorage.getItem('recipeSort') || 'recent' } catch { return 'recent' } })
@@ -3689,196 +3717,7 @@ export default function App() {
                     )
   }
 
-  return (
-    <div className="app">
-      <header className="app-header">
-        <h1><img src="/icons/logo.png" alt="" className="app-logo" /> Pizarra Semanal</h1>
-        <div className="week-nav">
-          <button onClick={() => setWeekOffset((w) => w - 1)} title="7 días atrás">
-            <ChevronLeft size={16} />
-          </button>
-          <span>{formatWeekRange(weekKey, startDayOfWeek)}</span>
-          <button onClick={() => setWeekOffset((w) => w + 1)} title="7 días adelante">
-            <ChevronRight size={16} />
-          </button>
-          {weekOffset !== 0 && (
-            <button className="btn-today" onClick={() => setWeekOffset(0)}>
-              Hoy
-            </button>
-          )}
-        </div>
-        <div className="start-day-picker">
-          <span className="start-day-label">Empieza el</span>
-          {['L', 'M', 'X', 'J', 'V', 'S', 'D'].map((abbr, i) => (
-            <button
-              key={i}
-              className={`start-day-btn${startDayOfWeek === i ? ' active' : ''}`}
-              onClick={() => { setStartDayOfWeek(i); setWeekOffset(0) }}
-              title={DAYS[i]}
-            >
-              {abbr}
-            </button>
-          ))}
-        </div>
-        <select
-          className="start-day-select"
-          value={startDayOfWeek}
-          onChange={(e) => { setStartDayOfWeek(Number(e.target.value)); setWeekOffset(0) }}
-          aria-label="Día en que empieza la semana"
-        >
-          {DAYS.map((d, i) => <option key={i} value={i}>Empieza: {d}</option>)}
-        </select>
-        <button className="logout-btn" onClick={handleLogout} title={`Cerrar sesión (${currentUser.username})`}>
-          <LogOut size={14} />
-          <span className="logout-name">{currentUser.username}</span>
-        </button>
-      </header>
-
-      <div className="app-body">
-        <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-        <div className="app-main" data-mtab={isMobile ? mobileTab : 'desktop'}>
-        <div className="board-wrapper">
-          {(copyingSlot || movingSlot) && (
-            <div className="copy-banner">
-              {movingSlot ? <ChevronRight size={14} /> : <Copy size={14} />}
-              {movingSlot
-                ? <>Moviendo <strong>{movingSlot.dish_name}</strong> — elige destino</>
-                : <>Copiando <strong>{copyingSlot.dish_name}</strong> — elige dónde pegar</>
-              }
-              <button onClick={() => { setCopyingSlot(null); setMovingSlot(null) }}><X size={13} /></button>
-            </div>
-          )}
-          {dietWarnings.length > 0 && (isMobile ? (
-            <details className="diet-warnings diet-warnings-mobile">
-              <summary>⚠️ Variedad: {dietWarnings.length} aviso{dietWarnings.length !== 1 ? 's' : ''}</summary>
-              {dietWarnings.map((w, i) => (
-                <div key={i} className="diet-warning">
-                  <strong>{w.category}</strong> varios días seguidos: {w.days.join(', ')}
-                </div>
-              ))}
-            </details>
-          ) : (
-            <div className="diet-warnings">
-              {dietWarnings.map((w, i) => (
-                <div key={i} className="diet-warning">
-                  ⚠️ <strong>{w.category}</strong> varios días seguidos: {w.days.join(', ')}
-                </div>
-              ))}
-            </div>
-          ))}
-            {isMobile && (
-              <div className="mobile-toolbar">
-                <div className="view-toggle" role="tablist">
-                  <button role="tab" aria-selected={mobileView === 'week'} className={mobileView === 'week' ? 'active' : ''} onClick={() => setMobileView('week')}>Semana</button>
-                  <button role="tab" aria-selected={mobileView === 'day'} className={mobileView === 'day' ? 'active' : ''} onClick={() => setMobileView('day')}>Día</button>
-                </div>
-                <button className="mobile-assistant-btn" onClick={() => setAssistant('menu')}>
-                  <Sparkles size={14} /> Asistente
-                </button>
-              </div>
-            )}
-            {isMobile && mobileView === 'day' ? (
-              <div
-                className="mobile-day"
-                onTouchStart={(e) => { swipe.current = { x: e.touches[0].clientX, y: e.touches[0].clientY } }}
-                onTouchEnd={(e) => {
-                  const st = swipe.current
-                  if (!st) return
-                  const dx = e.changedTouches[0].clientX - st.x
-                  const dy = e.changedTouches[0].clientY - st.y
-                  if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.6) {
-                    setMobileDay(Math.max(0, Math.min(6, selectedDay + (dx < 0 ? 1 : -1))))
-                  }
-                }}
-              >
-                <div className="day-strip">
-                  {DAYS.map((_, i) => {
-                    const date = getDayDate(weekKey, startDayOfWeek + i)
-                    const absIdx = (startDayOfWeek + i) % 7
-                    const colWk = startDayOfWeek + i >= 7 ? nextWeekKey : weekKey
-                    const count = slots.filter((x) => x.day_idx === absIdx && x.week_key === colWk).length
-                    return (
-                      <button
-                        key={i}
-                        className={`day-chip${selectedDay === i ? ' selected' : ''}${isToday(date) ? ' today' : ''}`}
-                        onClick={() => setMobileDay(i)}
-                      >
-                        <span className="day-chip-name">{DAYS[(startDayOfWeek + i) % 7].slice(0, 3)}</span>
-                        <span className="day-chip-date">{date.getDate()}</span>
-                        <span className="day-chip-dots">{count > 0 ? '●'.repeat(Math.min(count, 4)) : '\u00a0'}</span>
-                      </button>
-                    )
-                  })}
-                </div>
-                <div className="mobile-day-title">
-                  <span>
-                    {DAYS[(startDayOfWeek + selectedDay) % 7]}{' '}
-                    {getDayDate(weekKey, startDayOfWeek + selectedDay).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}
-                  </span>
-                </div>
-                {SLOTS.map((slot) => (
-                  <section key={slot.key} className="mobile-slot">
-                    <h4 className="mobile-slot-title">{slot.label}</h4>
-                    {renderCell(selectedDay, slot)}
-                  </section>
-                ))}
-              </div>
-            ) : (
-            <div className={isMobile ? 'week-scroll' : undefined} ref={weekScrollRef}>
-            <div className={`board${isMobile ? ' board-mobile' : ''}`}>
-              <div className="board-header-empty" />
-              {DAYS.map((_, i) => {
-                const date = getDayDate(weekKey, startDayOfWeek + i)
-                const name = DAYS[(startDayOfWeek + i) % 7]
-                return (
-                  <div
-                    key={i}
-                    className={`board-day-header${isToday(date) ? ' today' : ''}`}
-                  >
-                    <div className="day-name">{name}</div>
-                    <div className="day-date">
-                      {date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
-                    </div>
-                  </div>
-                )
-              })}
-
-              {SLOTS.map((slot) => (
-                <React.Fragment key={slot.key}>
-                  <div className="board-slot-label">{slot.label}</div>
-                  {DAYS.map((_, i) => renderCell(i, slot))}
-                </React.Fragment>
-              ))}
-            </div>
-            </div>
-            )}
-        </div>{/* /board-wrapper */}
-        <DragOverlay dropAnimation={null}>
-              {activeId && (() => {
-                if (String(activeId).startsWith('pool-')) {
-                  const p = poolItems.find((x) => x.id === String(activeId).replace('pool-', ''))
-                  return p ? <div className="tray-dish-overlay">{p.dish_name || '…'}</div> : null
-                }
-                if (String(activeId).startsWith('recipe-')) {
-                  const r = savedRecipes.find((x) => `recipe-${x.id}` === activeId)
-                  if (!r) return null
-                  const cat = getDominantCategory([], ingredients, r.name)
-                  const bg = cat ? (CATEGORY_PASTELS[cat] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
-                  return <div className="postit-overlay" style={{ background: bg }}><span className="postit-name">{titleCase(r.name)}</span></div>
-                }
-                if (String(activeId).startsWith('shopping-custom-')) {
-                  const customId = String(activeId).replace('shopping-custom-', '')
-                  const item = customItems.find((i) => i.id === customId)
-                  return item ? <div className="shopping-item-overlay">{titleCase(item.name)}</div> : null
-                }
-                const s = slots.find((x) => x.id === activeId)
-                if (!s) return null
-                const cat = effectiveOverrides[s.id] || getDominantCategory(s.ingredient_ids, ingredients, s.dish_name)
-                const bg = cat ? (CATEGORY_PASTELS[cat] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
-                return <div className="postit-overlay" style={{ background: bg }}><span className="postit-name">{titleCase(s.dish_name)}</span></div>
-              })()}
-            </DragOverlay>
-
+  const trayNode = (
         <div className="dishes-tray">
           <div className="tray-tabs">
             <button className={`tray-tab${trayTab === 'pool' ? ' active' : ''}`} onClick={() => setTrayTab('pool')}>
@@ -4054,8 +3893,10 @@ export default function App() {
             </DroppableTrayZone>
           )}
         </div>
-        </div>{/* /app-main */}
+  )
 
+  const sidebarNode = (
+    <>
         {shoppingOpen && (
           <div className="sidebar-overlay" onClick={() => setShoppingOpen(false)} />
         )}
@@ -4181,6 +4022,250 @@ export default function App() {
             </div>
           </div>
         </aside>
+    </>
+  )
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <h1><img src="/icons/logo.png" alt="" className="app-logo" /> Pizarra Semanal</h1>
+        <div className="week-nav">
+          <button onClick={() => setWeekOffset((w) => w - 1)} title="7 días atrás">
+            <ChevronLeft size={16} />
+          </button>
+          <span>{formatWeekRange(weekKey, startDayOfWeek)}</span>
+          <button onClick={() => setWeekOffset((w) => w + 1)} title="7 días adelante">
+            <ChevronRight size={16} />
+          </button>
+          {weekOffset !== 0 && (
+            <button className="btn-today" onClick={() => setWeekOffset(0)}>
+              Hoy
+            </button>
+          )}
+        </div>
+        <select
+          className="start-day-select"
+          value={startDayOfWeek}
+          onChange={(e) => { setStartDayOfWeek(Number(e.target.value)); setWeekOffset(0) }}
+          aria-label="Día en que empieza la semana"
+        >
+          {DAYS.map((d, i) => <option key={i} value={i}>Empieza: {d}</option>)}
+        </select>
+        <div className="header-actions">
+          <button className="header-assistant" onClick={() => setAssistant('menu')} title="Sugerir el menú de la semana o buscar ideas de recetas con IA">
+            <Sparkles size={16} /> Asistente
+          </button>
+          <div className="settings-wrap">
+            <button className="icon-btn" onClick={() => setSettingsOpen((v) => !v)} aria-label="Ajustes" aria-expanded={settingsOpen} title="Ajustes">
+              <Settings size={18} />
+            </button>
+            {settingsOpen && (
+              <div className="settings-pop" role="dialog" aria-label="Ajustes">
+                <div className="settings-title">La semana empieza el</div>
+                <div className="settings-days">
+                  {['L', 'M', 'X', 'J', 'V', 'S', 'D'].map((abbr, i) => (
+                    <button
+                      key={i}
+                      className={`start-day-btn${startDayOfWeek === i ? ' active' : ''}`}
+                      onClick={() => { setStartDayOfWeek(i); setWeekOffset(0) }}
+                      title={DAYS[i]}
+                    >
+                      {abbr}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <button className="logout-btn" onClick={handleLogout} title={`Cerrar sesión (${currentUser.username})`}>
+          <LogOut size={14} />
+          <span className="logout-name">{currentUser.username}</span>
+        </button>
+        </div>
+      </header>
+
+      <div className="app-body">
+        <DndContext sensors={sensors} collisionDetection={collisionByPointer} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <div className="app-main" data-mtab={isMobile ? mobileTab : 'desktop'}>
+        <div className="board-wrapper">
+          {(copyingSlot || movingSlot) && (
+            <div className="copy-banner">
+              {movingSlot ? <ChevronRight size={14} /> : <Copy size={14} />}
+              {movingSlot
+                ? <>Moviendo <strong>{movingSlot.dish_name}</strong> — elige destino</>
+                : <>Copiando <strong>{copyingSlot.dish_name}</strong> — elige dónde pegar</>
+              }
+              <button onClick={() => { setCopyingSlot(null); setMovingSlot(null) }}><X size={13} /></button>
+            </div>
+          )}
+          {dietWarnings.length > 0 && (isMobile ? (
+            <details className="diet-warnings diet-warnings-mobile">
+              <summary>⚠️ Variedad: {dietWarnings.length} aviso{dietWarnings.length !== 1 ? 's' : ''}</summary>
+              {dietWarnings.map((w, i) => (
+                <div key={i} className="diet-warning">
+                  <strong>{w.category}</strong> varios días seguidos: {w.days.join(', ')}
+                </div>
+              ))}
+            </details>
+          ) : (
+            <div className="diet-warnings">
+              {dietWarnings.map((w, i) => (
+                <div key={i} className="diet-warning">
+                  ⚠️ <strong>{w.category}</strong> varios días seguidos: {w.days.join(', ')}
+                </div>
+              ))}
+            </div>
+          ))}
+            {isMobile && (
+              <div className="mobile-toolbar">
+                <div className="view-toggle" role="tablist">
+                  <button role="tab" aria-selected={mobileView === 'week'} className={mobileView === 'week' ? 'active' : ''} onClick={() => setMobileView('week')}>Semana</button>
+                  <button role="tab" aria-selected={mobileView === 'day'} className={mobileView === 'day' ? 'active' : ''} onClick={() => setMobileView('day')}>Día</button>
+                </div>
+                <button className="mobile-assistant-btn" onClick={() => setAssistant('menu')}>
+                  <Sparkles size={14} /> Asistente
+                </button>
+              </div>
+            )}
+            {isMobile && mobileView === 'day' ? (
+              <div
+                className="mobile-day"
+                onTouchStart={(e) => { swipe.current = { x: e.touches[0].clientX, y: e.touches[0].clientY } }}
+                onTouchEnd={(e) => {
+                  const st = swipe.current
+                  if (!st) return
+                  const dx = e.changedTouches[0].clientX - st.x
+                  const dy = e.changedTouches[0].clientY - st.y
+                  if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.6) {
+                    setMobileDay(Math.max(0, Math.min(6, selectedDay + (dx < 0 ? 1 : -1))))
+                  }
+                }}
+              >
+                <div className="day-strip">
+                  {DAYS.map((_, i) => {
+                    const date = getDayDate(weekKey, startDayOfWeek + i)
+                    const absIdx = (startDayOfWeek + i) % 7
+                    const colWk = startDayOfWeek + i >= 7 ? nextWeekKey : weekKey
+                    const count = slots.filter((x) => x.day_idx === absIdx && x.week_key === colWk).length
+                    return (
+                      <button
+                        key={i}
+                        className={`day-chip${selectedDay === i ? ' selected' : ''}${isToday(date) ? ' today' : ''}`}
+                        onClick={() => setMobileDay(i)}
+                      >
+                        <span className="day-chip-name">{DAYS[(startDayOfWeek + i) % 7].slice(0, 3)}</span>
+                        <span className="day-chip-date">{date.getDate()}</span>
+                        <span className="day-chip-dots">{count > 0 ? '●'.repeat(Math.min(count, 4)) : '\u00a0'}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+                <div className="mobile-day-title">
+                  <span>
+                    {DAYS[(startDayOfWeek + selectedDay) % 7]}{' '}
+                    {getDayDate(weekKey, startDayOfWeek + selectedDay).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}
+                  </span>
+                </div>
+                {SLOTS.map((slot) => (
+                  <section key={slot.key} className="mobile-slot">
+                    <h4 className="mobile-slot-title">{slot.label}</h4>
+                    {renderCell(selectedDay, slot)}
+                  </section>
+                ))}
+              </div>
+            ) : (
+            <div className={isMobile ? 'week-scroll' : undefined} ref={weekScrollRef}>
+            <div className={`board${isMobile ? ' board-mobile' : ''}`}>
+              <div className="board-header-empty" />
+              {DAYS.map((_, i) => {
+                const date = getDayDate(weekKey, startDayOfWeek + i)
+                const name = DAYS[(startDayOfWeek + i) % 7]
+                return (
+                  <div
+                    key={i}
+                    className={`board-day-header${isToday(date) ? ' today' : ''}`}
+                  >
+                    <div className="day-name">{name}</div>
+                    <div className="day-date">
+                      {date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
+                    </div>
+                  </div>
+                )
+              })}
+
+              {SLOTS.map((slot) => (
+                <React.Fragment key={slot.key}>
+                  <div className="board-slot-label">{slot.label}</div>
+                  {DAYS.map((_, i) => renderCell(i, slot))}
+                </React.Fragment>
+              ))}
+            </div>
+            </div>
+            )}
+        </div>{/* /board-wrapper */}
+        <DragOverlay dropAnimation={null}>
+              {activeId && (() => {
+                if (String(activeId).startsWith('pool-')) {
+                  const p = poolItems.find((x) => x.id === String(activeId).replace('pool-', ''))
+                  return p ? <div className="tray-dish-overlay">{p.dish_name || '…'}</div> : null
+                }
+                if (String(activeId).startsWith('recipe-')) {
+                  const r = savedRecipes.find((x) => `recipe-${x.id}` === activeId)
+                  if (!r) return null
+                  const cat = getDominantCategory([], ingredients, r.name)
+                  const bg = cat ? (CATEGORY_PASTELS[cat] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
+                  return <div className="postit-overlay" style={{ background: bg }}><span className="postit-name">{titleCase(r.name)}</span></div>
+                }
+                if (String(activeId).startsWith('shopping-custom-')) {
+                  const customId = String(activeId).replace('shopping-custom-', '')
+                  const item = customItems.find((i) => i.id === customId)
+                  return item ? <div className="shopping-item-overlay">{titleCase(item.name)}</div> : null
+                }
+                const s = slots.find((x) => x.id === activeId)
+                if (!s) return null
+                const cat = effectiveOverrides[s.id] || getDominantCategory(s.ingredient_ids, ingredients, s.dish_name)
+                const bg = cat ? (CATEGORY_PASTELS[cat] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
+                return <div className="postit-overlay" style={{ background: bg }}><span className="postit-name">{titleCase(s.dish_name)}</span></div>
+              })()}
+            </DragOverlay>
+
+        {isMobile && trayNode}
+        </div>{/* /app-main */}
+
+        {isMobile ? sidebarNode : (
+          <aside className={`side-panel${panelOpen ? '' : ' collapsed'}`}>
+            {panelOpen ? (
+              <>
+                <div className="side-tabs">
+                  <div className="side-tablist" role="tablist">
+                    <button role="tab" aria-selected={panelTab === 'shop'} className={`side-tab${panelTab === 'shop' ? ' active' : ''}`} onClick={() => choosePanelTab('shop')}>
+                      Compra {totalItems > 0 && <span className="side-badge">{totalItems}</span>}
+                    </button>
+                    <button role="tab" aria-selected={panelTab === 'pool'} className={`side-tab${panelTab === 'pool' ? ' active' : ''}`} onClick={() => choosePanelTab('pool')}>
+                      Despensa
+                    </button>
+                    <button role="tab" aria-selected={panelTab === 'recipes'} className={`side-tab${panelTab === 'recipes' ? ' active' : ''}`} onClick={() => choosePanelTab('recipes')}>
+                      Recetas {savedRecipes.length > 0 && <span className="side-badge">{savedRecipes.length}</span>}
+                    </button>
+                  </div>
+                  <button className="side-collapse" onClick={() => setPanelOpenPersist(false)} title="Plegar el panel" aria-label="Plegar el panel">
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+                <div className="side-body">{panelTab === 'shop' ? sidebarNode : trayNode}</div>
+              </>
+            ) : (
+              <div className="side-rail">
+                <button className="side-rail-btn" onClick={() => setPanelOpenPersist(true)} title="Abrir el panel" aria-label="Abrir el panel"><ChevronLeft size={18} /></button>
+                <button className="side-rail-btn" onClick={() => choosePanelTab('shop')} title="Lista de la compra" aria-label="Lista de la compra">
+                  <span className="mobile-nav-icon"><ShoppingCart size={19} />{totalItems > 0 && <span className="fab-badge">{totalItems}</span>}</span>
+                </button>
+                <button className="side-rail-btn" onClick={() => choosePanelTab('pool')} title="Despensa" aria-label="Despensa"><Package size={19} /></button>
+                <button className="side-rail-btn" onClick={() => choosePanelTab('recipes')} title="Recetas" aria-label="Recetas"><BookOpen size={19} /></button>
+              </div>
+            )}
+          </aside>
+        )}
         </DndContext>
       </div>{/* /app-body */}
 
