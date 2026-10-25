@@ -2373,7 +2373,7 @@ html, body {
   /* En táctil los botones sueltos tapan el nombre: todo va al botón ⋯ del pie */
   .board .postit .postit-actions, .mobile-slot .postit .postit-actions { display: none; }
 
-  .postit .postit-more-touch { display: flex; width: 28px; height: 28px; }
+  .postit .postit-more-touch { display: flex; opacity: 1; width: 28px; height: 28px; }
   .postit-btn { width: 26px; height: 26px; }
   .drag-handle {
     color: var(--text-muted);
@@ -2389,7 +2389,11 @@ html, body {
   .context-menu-item { padding: 11px 12px; font-size: 14px; }
 }
 
-.postit-more-touch { display: none; }
+/* Botón ⋯ en el pie de cada plato del tablero: aparece al pasar el ratón (en táctil, siempre).
+   Sustituye a los botones de la esquina, que tapaban el nombre y estorbaban al hacer doble clic. */
+.board .postit .postit-actions, .mobile-slot .postit .postit-actions { display: none; }
+.postit-more-touch { display: flex; opacity: 0; transition: opacity 0.15s; margin-left: auto; margin-right: 4px; }
+.postit:hover .postit-more-touch, .postit-more-touch:focus-visible { opacity: 1; }
 .context-menu-danger { color: var(--red); }
 
 /* ── Lista de la compra: fila unificada ──────────────────────────────────── */
@@ -2686,3 +2690,36 @@ html, body {
 .style-group summary::after { content: '▾'; margin-left: auto; color: var(--text-muted); }
 .style-group[open] summary::after { content: '▴'; }
 .style-count { background: var(--accent); color: #fff; border-radius: 99px; font-size: 11px; padding: 0 7px; line-height: 18px; }
+
+/* ── Bandeja: botones de acción juntos, a la derecha de las pestañas ─────── */
+.tray-actions { display: flex; align-items: center; gap: 6px; margin-left: 4px; padding-left: 12px; border-left: 1.5px solid var(--border); }
+.tray-actions .tray-add-btn { margin-left: 0 !important; }
+@media (max-width: 768px) { .tray-actions { width: 100%; margin-left: 0; } .tray-actions .tray-add-btn { flex: 1 1 auto; } }
+
+/* El selector de día/comida va por encima del asistente */
+.plan-backdrop { z-index: 320; }
+
+/* ── Propuestas IA: progreso ─────────────────────────────────────────────── */
+.proposal-progress { display: flex; flex-direction: column; gap: 12px; }
+.proposal-progress-head { display: flex; align-items: center; gap: 12px; }
+.proposal-progress-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.proposal-progress-bar { height: 5px; border-radius: 99px; background: var(--surface3); overflow: hidden; }
+.proposal-progress-bar div { height: 100%; width: 35%; border-radius: 99px; background: var(--accent); animation: ai-slide 1.4s ease-in-out infinite; }
+@keyframes ai-slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+.proposal-skeleton { border: 1.5px solid var(--border); border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 8px; animation: ai-pulse 1.4s ease-in-out infinite; }
+@keyframes ai-pulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+.sk-line { height: 10px; border-radius: 6px; background: var(--surface3); }
+.sk-title { width: 45%; height: 14px; }
+.sk-short { width: 65%; }
+.proposal-progress > .btn { align-self: center; }
+.proposal-added { font-size: 12px; font-weight: 700; color: var(--green); display: inline-flex; align-items: center; padding: 0 6px; }
+.proposal-next { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; justify-content: space-between; padding: 10px 12px; border-radius: var(--radius); background: var(--green-light); color: var(--text); font-size: 13px; }
+
+@media (max-width: 768px) { .tray-actions { border-left: none; padding-left: 0; } }
+
+/* Receta en la bandeja de escritorio: más ancha y con la fila de valoración que envuelve (antes se salía de la tarjeta) */
+@media (min-width: 769px) {
+  .recipe-postit { width: 158px; }
+  .recipe-postit .recipe-star-row { flex-wrap: wrap; row-gap: 2px; }
+  .recipe-postit .recipe-meta { margin-left: 0; }
+}

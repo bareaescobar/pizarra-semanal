@@ -632,8 +632,9 @@ function DishModal({ mode, slot, dayIdx, slotKey, startDayOfWeek, ingredients, s
 
   const suggestions = useMemo(() => {
     if (!dishName.trim()) return []
-    const q = dishName.toLowerCase()
-    return savedRecipes.filter((r) => r.name.toLowerCase().includes(q)).slice(0, 6)
+    const q = dishName.trim().toLowerCase()
+    // No se sugiere lo que ya está escrito tal cual (en "Editar plato" salía el propio nombre tapando el formulario)
+    return savedRecipes.filter((r) => { const n = (r.name || '').toLowerCase(); return n.includes(q) && n !== q }).slice(0, 6)
   }, [dishName, savedRecipes])
 
   // Ingredientes ya guardados para este plato y nivel de esfuerzo
@@ -2233,6 +2234,43 @@ function LoginScreen() {
 
 // ─── AIRecipeProposalsModal ──────────────────────────────────────────────────
 
+// Progreso mientras la IA trabaja: tiempo transcurrido, mensajes por fases y huecos de las tarjetas
+function ProposalProgress({ count, onCancel }) {
+  const [secs, setSecs] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setSecs((n) => n + 1), 1000)
+    return () => clearInterval(id)
+  }, [])
+  const phases = [
+    'Eligiendo platos que encajen con tus filtros…',
+    'Combinando ingredientes y comprobando tiempos…',
+    'Escribiendo ingredientes y pasos…',
+    'Ajustando etiquetas y últimos detalles…',
+    'Casi listo, la IA está tardando un poco más de lo normal…',
+  ]
+  const phase = phases[Math.min(phases.length - 1, Math.floor(secs / 6))]
+  return (
+    <div className="proposal-progress" role="status" aria-live="polite">
+      <div className="proposal-progress-head">
+        <div className="spinner" />
+        <div>
+          <strong>{phase}</strong>
+          <div className="proposal-progress-sub">
+            {secs} s · generando {count} plato{count !== 1 ? 's' : ''} con IA, puede tardar un poco
+          </div>
+        </div>
+      </div>
+      <div className="proposal-progress-bar"><div /></div>
+      {Array.from({ length: Math.min(count, 5) }, (_, i) => (
+        <div key={i} className="proposal-skeleton" style={{ animationDelay: `${i * 0.15}s` }}>
+          <div className="sk-line sk-title" /><div className="sk-line" /><div className="sk-line sk-short" />
+        </div>
+      ))}
+      <button className="btn btn-ghost" type="button" onClick={onCancel}>Cancelar</button>
+    </div>
+  )
+}
+
 const AI_DEFAULT_PREFS = {
   count: 5,
   meal: '',
@@ -2263,7 +2301,7 @@ const AI_PRESETS = [
 
 const LIGHT_LABELS = { ligero: '🥗 Ligero', equilibrado: '⚖️ Equilibrado', contundente: '🍖 Contundente' }
 
-function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClose, onAdd, hidden = false, tabs = null }) {
+function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClose, onAdd, onPlan, onGoMenu, hidden = false, tabs = null }) {
   const [step, setStep] = useState('form') // 'form' | 'list'
   const [prefs, setPrefs] = useState(AI_DEFAULT_PREFS)
   const [showIngredients, setShowIngredients] = useState(false)
@@ -2272,6 +2310,7 @@ function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClo
   const [open, setOpen] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const reqRef = useRef(0) // para descartar el resultado si se cancela
 
   const set = (patch) => setPrefs((p) => ({ ...p, ...patch }))
   const toggleStyle = (group, option) => setPrefs((p) => {
@@ -2284,11 +2323,20 @@ function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClo
     else set(preset.apply)
   }
 
+  function cancelGenerate() {
+    reqRef.current += 1
+    setLoading(false)
+    setStep('form')
+  }
+
   async function handleGenerate() {
+    const myReq = ++reqRef.current
     setLoading(true)
     setError(null)
     setAdded(new Set())
     setOpen(null)
+    setProposals([])
+    setStep('list') // se muestra enseguida el progreso en lugar de dejar el formulario "colgado"
     try {
       const availableNames = prefs.available.map((id) => ingredients.find((i) => i.id === id)?.name).filter(Boolean)
       const { proposals: list } = await callAI('proposals', {
@@ -2307,12 +2355,13 @@ function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClo
         },
         history: savedRecipes.map((r) => r.name).filter(Boolean),
       })
+      if (reqRef.current !== myReq) return
       setProposals(list)
-      setStep('list')
     } catch (e) {
+      if (reqRef.current !== myReq) return
       setError(e.message)
     } finally {
-      setLoading(false)
+      if (reqRef.current === myReq) setLoading(false)
     }
   }
 
@@ -2439,8 +2488,8 @@ function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClo
           {step === 'list' && (
             <>
               {loading ? (
-                <div className="ai-loading"><div className="spinner" />Consultando IA…</div>
-              ) : proposals.length === 0 ? (
+                <ProposalProgress count={prefs.count} onCancel={cancelGenerate} />
+              ) : proposals.length === 0 && !error ? (
                 <p>Sin propuestas. Vuelve al formulario.</p>
               ) : (
                 <div className="proposal-list">
@@ -2468,12 +2517,29 @@ function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClo
                         <button className="btn btn-ghost" type="button" onClick={() => setOpen(open === i ? null : i)}>
                           {open === i ? 'Ocultar' : 'Ver receta'}
                         </button>
-                        <button className="btn btn-primary" type="button" disabled={added.has(i)} onClick={() => addOne(p, i)}>
-                          {added.has(i) ? '✓ Añadida' : <><Plus size={12} /> Añadir a recetas</>}
-                        </button>
+                        {added.has(i) ? (
+                          <>
+                            <span className="proposal-added">✓ En tus recetas</span>
+                            <button className="btn btn-primary" type="button" onClick={() => onPlan?.(p.name)}>
+                              <CalendarPlus size={13} /> Añadir al menú
+                            </button>
+                          </>
+                        ) : (
+                          <button className="btn btn-primary" type="button" onClick={() => addOne(p, i)}>
+                            <Plus size={12} /> Añadir a recetas
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+              {!loading && proposals.length > 1 && added.size === proposals.length && (
+                <div className="proposal-next">
+                  ✓ Las {proposals.length} recetas ya están en tu recetario. ¿Quieres colocarlas en el menú de la semana?
+                  <button className="btn btn-primary" type="button" onClick={() => onGoMenu?.()}>
+                    <CalendarDays size={13} /> Planificar el menú
+                  </button>
                 </div>
               )}
               {error && <div style={{ color: '#dc2626', fontSize: 12 }}>{error}</div>}
@@ -2533,7 +2599,7 @@ function PlanPicker({ title, startDayOfWeek, weekKey, initialDay = 0, onClose, o
   const [day, setDay] = useState(initialDay)
   const [slotKey, setSlotKey] = useState('lunch')
   return (
-    <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="modal-backdrop plan-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal plan-picker">
         <div className="modal-header">
           <h3>{title}</h3>
@@ -3221,6 +3287,11 @@ export default function App() {
     try {
       if (pk.mode === 'recipe') {
         setAddModal({ dayIdx: day, slotKey, initialName: pk.name })
+      } else if (pk.mode === 'recipeDirect') {
+        // Receta ya guardada (p. ej. de la IA): va directa al menú con sus ingredientes guardados
+        await handleSaveDish({ dishName: pk.name, effort: 1, selectedIds: null, dayIdx: day, slotKey })
+        const dayName = DAYS[(startDayOfWeek + day) % 7]
+        showToast(`"${titleCase(pk.name)}" añadida al menú (${dayName}, ${SLOTS.find((x) => x.key === slotKey)?.label.toLowerCase()})`)
       } else if (pk.mode === 'pool') {
         await handleSaveDish({ dishName: pk.item.dish_name, effort: pk.item.effort || 1, selectedIds: null, dayIdx: day, slotKey })
         showToast(`"${titleCase(pk.item.dish_name)}" añadido al menú`)
@@ -3816,26 +3887,28 @@ export default function App() {
             <button className={`tray-tab${trayTab === 'recipes' ? ' active' : ''}`} onClick={() => setTrayTab('recipes')}>
               Recetas{savedRecipes.length > 0 && <span className="tray-tab-count">{savedRecipes.length}</span>}
             </button>
-            {trayTab === 'pool' && (
-              <>
-                <button className="btn-add-slot tray-add-btn" onClick={() => addPoolItem()}>
-                  <Plus size={11} /> Plato
-                </button>
-                <button className="btn-add-slot tray-add-btn" onClick={() => setPantryModal({ mode: 'ingredient' })}>
-                  <Plus size={11} /> Ingrediente
-                </button>
-              </>
-            )}
-            {trayTab === 'recipes' && (
-              <>
-                <button className="btn-add-slot tray-add-btn" onClick={() => addRecipe('')}>
-                  <Plus size={11} /> Receta
-                </button>
-                <button className="btn-add-slot tray-add-btn tray-ai-btn" onClick={() => setAssistant('menu')} title="Sugerir el menú de la semana o buscar ideas de recetas con IA">
-                  <Sparkles size={11} /> Asistente
-                </button>
-              </>
-            )}
+            <div className="tray-actions">
+              {trayTab === 'pool' && (
+                <>
+                  <button className="btn-add-slot tray-add-btn" onClick={() => addPoolItem()}>
+                    <Plus size={11} /> Plato
+                  </button>
+                  <button className="btn-add-slot tray-add-btn" onClick={() => setPantryModal({ mode: 'ingredient' })}>
+                    <Plus size={11} /> Ingrediente
+                  </button>
+                </>
+              )}
+              {trayTab === 'recipes' && (
+                <>
+                  <button className="btn-add-slot tray-add-btn" onClick={() => addRecipe('')}>
+                    <Plus size={11} /> Receta
+                  </button>
+                  <button className="btn-add-slot tray-add-btn tray-ai-btn" onClick={() => setAssistant('menu')} title="Sugerir el menú de la semana o buscar ideas de recetas con IA">
+                    <Sparkles size={11} /> Asistente
+                  </button>
+                </>
+              )}
+            </div>
           </div>
 
           {trayTab === 'pool' && (
@@ -4206,12 +4279,14 @@ export default function App() {
           availableIds={pantryIngredients.map((p) => p.ingredient_id).filter(Boolean)}
           onClose={() => setAssistant(null)}
           onAdd={handleAddProposal}
+          onPlan={(name) => setPlanPicker({ mode: 'recipeDirect', name })}
+          onGoMenu={() => setAssistant('menu')}
         />
       )}
 
       {planPicker && (
         <PlanPicker
-          title={planPicker.mode === 'move' ? 'Mover a…' : planPicker.mode === 'copy' ? 'Copiar a…' : 'Añadir al menú'}
+          title={planPicker.mode === 'move' ? 'Mover a…' : planPicker.mode === 'copy' ? 'Copiar a…' : planPicker.mode === 'recipeDirect' ? `Añadir "${titleCase(planPicker.name)}" al menú` : 'Añadir al menú'}
           startDayOfWeek={startDayOfWeek}
           weekKey={weekKey}
           initialDay={selectedDay}

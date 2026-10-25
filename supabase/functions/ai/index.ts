@@ -139,31 +139,75 @@ Responde ÚNICAMENTE con este JSON (sin texto adicional):
     if (f.notes) rules.push(`Notas: ${String(f.notes).slice(0, 300)}`)
     const history = list(b.history, 60)
 
-    const text = await gemini(`Eres un asistente de cocina española para una pareja que intenta comer sano y que a veces tiene poco tiempo para cocinar. Propón EXACTAMENTE ${count} plato${count > 1 ? 's' : ''} distinto${count > 1 ? 's' : ''}, sencillos y apetecibles.
+    // Lotes de hasta 4 platos pedidos a la vez: el tiempo total es el de un lote, no el de todos
+    const CHUNK_MAX = 4
+    const chunks = Math.ceil(count / CHUNK_MAX)
+    const base = Math.floor(count / chunks)
+    const extra = count % chunks
+    const sizes = Array.from({ length: chunks }, (_, i) => base + (i < extra ? 1 : 0))
+    // Sin un tipo de plato elegido, cada lote se centra en algo distinto para que no se repitan entre sí
+    const HINTS = [
+      'con pescado o marisco como protagonista',
+      'con ave (pollo o pavo) o carne magra',
+      'con legumbres, huevo o tofu',
+      'con verduras, pasta o arroz como protagonista',
+    ]
+    const useHints = chunks > 1 && types.length === 0
+
+    const ask = async (n: number, hint: string, exclude: string[] = []) => {
+      const known = [...history, ...exclude]
+      const text = await gemini(`Eres un asistente de cocina española para una pareja que intenta comer sano y que a veces tiene poco tiempo para cocinar. Propón EXACTAMENTE ${n} plato${n > 1 ? 's' : ''} distinto${n > 1 ? 's' : ''}, sencillos y apetecibles.
 
 Requisitos:
-${rules.length ? rules.map((r) => '- ' + r).join('\n') : '- Sin requisitos especiales'}
+${rules.length ? rules.map((r) => '- ' + r).join('\n') : '- Sin requisitos especiales'}${hint ? `\n- Este lote debe centrarse en platos ${hint} (otros lotes cubren otros tipos)` : ''}
 
-Ya tienen en su recetario: ${history.length ? history.join(', ') : 'nada'}. Propón platos DIFERENTES a esos.
+Ya tienen en su recetario: ${known.length ? known.join(', ') : 'nada'}. Propón platos DIFERENTES a esos.
 
 Para cada plato devuelve: nombre, descripción de 1 frase, tiempo total en minutos (número), ligereza ("ligero", "equilibrado" o "contundente"), tipo (uno de: ${DISH_TYPES.join(', ')}), ingredientes (cada uno con nombre simple en español y categoría de esta lista: ${CATEGORIES.join(', ')}), pasos (texto plano numerado, máx. 6 pasos cortos) y etiquetas (de 1 a 4, en minúsculas, muy cortas: estilo de cocina, método, dieta u ocasión; por ejemplo "mediterránea", "airfryer", "tupper", "rápido").
 
 Responde ÚNICAMENTE con este JSON (sin markdown):
 {"proposals":[{"name":"","description":"","time_min":0,"light":"ligero","type":"","ingredients":[{"name":"","category":""}],"steps":"","tags":[""]}]}`)
-    const p = parseJson(text)
-    const out = (Array.isArray(p.proposals) ? p.proposals : []).slice(0, count).map((x: any) => ({
-      name: String(x.name || '').slice(0, 100),
-      description: String(x.description || '').slice(0, 300),
-      time_min: Number.isFinite(Number(x.time_min)) ? Math.round(Number(x.time_min)) : null,
-      light: ['ligero', 'equilibrado', 'contundente'].includes(x.light) ? x.light : null,
-      type: DISH_TYPES.includes(x.type) ? x.type : null,
-      ingredients: (Array.isArray(x.ingredients) ? x.ingredients : []).slice(0, 25).map((i: any) => ({
-        name: String(i?.name ?? i ?? '').slice(0, 60),
-        category: CATEGORIES.includes(i?.category) ? i.category : 'Otros',
-      })).filter((i: any) => i.name),
-      steps: String(x.steps || '').slice(0, 2000),
-      tags: list(x.tags, 4).map((t: string) => t.toLowerCase().trim()).filter(Boolean),
-    })).filter((x: any) => x.name)
+      const p = parseJson(text)
+      return (Array.isArray(p.proposals) ? p.proposals : []).slice(0, n).map((x: any) => ({
+        name: String(x.name || '').slice(0, 100),
+        description: String(x.description || '').slice(0, 300),
+        time_min: Number.isFinite(Number(x.time_min)) ? Math.round(Number(x.time_min)) : null,
+        light: ['ligero', 'equilibrado', 'contundente'].includes(x.light) ? x.light : null,
+        type: DISH_TYPES.includes(x.type) ? x.type : null,
+        ingredients: (Array.isArray(x.ingredients) ? x.ingredients : []).slice(0, 25).map((i: any) => ({
+          name: String(i?.name ?? i ?? '').slice(0, 60),
+          category: CATEGORIES.includes(i?.category) ? i.category : 'Otros',
+        })).filter((i: any) => i.name),
+        steps: String(x.steps || '').slice(0, 2000),
+        tags: list(x.tags, 4).map((t: string) => t.toLowerCase().trim()).filter(Boolean),
+      })).filter((x: any) => x.name)
+    }
+
+    const results = await Promise.allSettled(sizes.map((n, i) => ask(n, useHints ? HINTS[i % HINTS.length] : '')))
+    const got = results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))
+    if (!got.length) {
+      const failed = results.find((r) => r.status === 'rejected') as PromiseRejectedResult | undefined
+      throw failed?.reason ?? new Error('La IA no devolvió propuestas')
+    }
+    // Sin repetidos entre lotes (mismo nombre sin tildes ni mayúsculas)
+    const norm = (n: string) => n.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
+    const dedupe = (arr: any[]) => {
+      const seen = new Set<string>()
+      return arr.filter((x: any) => {
+        const k = norm(x.name)
+        if (seen.has(k)) return false
+        seen.add(k)
+        return true
+      })
+    }
+    let out = dedupe(got).slice(0, count)
+    // Si por repetidos faltan platos, se pide solo lo que falta (rara vez ocurre)
+    if (out.length < count) {
+      try {
+        const more = await ask(count - out.length, '', out.map((x: any) => x.name))
+        out = dedupe([...out, ...more]).slice(0, count)
+      } catch { /* se devuelven los que hay */ }
+    }
     return { proposals: out }
   },
 }
