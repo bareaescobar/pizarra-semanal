@@ -1,8 +1,10 @@
 import { createClient } from '@supabase/supabase-js'
 
+// La sesión se guarda en el dispositivo y se renueva sola: no hace falta volver a escribir usuario y contraseña
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
+  import.meta.env.VITE_SUPABASE_ANON_KEY,
+  { auth: { persistSession: true, autoRefreshToken: true } }
 )
 
 export default supabase
