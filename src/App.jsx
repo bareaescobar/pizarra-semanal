@@ -31,6 +31,7 @@ import {
   Star,
   Tag,
   Wand2,
+  BookOpen,
 } from 'lucide-react'
 import supabase, { dbGet, dbInsert, dbUpdate, dbDelete } from './supabase.js'
 import { INGREDIENT_CATEGORIES, DEFAULT_INGREDIENTS } from './ingredients.js'
@@ -90,14 +91,19 @@ const FOOD_TYPES = [
 // Categories that should NOT trigger consecutive-day warnings
 const ALERT_EXCLUDED = new Set(['Verduras y Hortalizas', 'Condimentos y Especias', 'Aceites y Vinagres', 'Frutas', 'Otros', null])
 
+// Prefijos de palabra (se comparan sin tildes y al inicio de cada palabra: "lenteja" cubre "lentejas")
 const DISH_KEYWORDS = {
-  'Carnes':                ['pollo', 'pechuga', 'muslo', 'ternera', 'cerdo', 'cordero', 'pavo', 'conejo', 'costilla', 'albóndiga', 'hamburguesa', 'filete', 'chuleta', 'lomo', 'salchicha', 'chorizo', 'carne'],
-  'Pescados y Mariscos':   ['merluza', 'salmón', 'atún', 'bacalao', 'gambas', 'langostino', 'mejillón', 'pulpo', 'calamar', 'sepia', 'dorada', 'lubina', 'sardina', 'boquerón', 'rape', 'pescado', 'marisco'],
-  'Verduras y Hortalizas': ['ensalada', 'espinaca', 'brócoli', 'zanahoria', 'calabacín', 'pimiento', 'berenjena', 'tomate', 'lechuga', 'menestra', 'verdura', 'acelga'],
-  'Pasta y Arroz':         ['pasta', 'macarrón', 'espagueti', 'arroz', 'paella', 'fideos', 'lasaña', 'risotto', 'canelón', 'tallarín'],
-  'Legumbres y Cereales':  ['lentejas', 'garbanzos', 'alubias', 'judías', 'fabes', 'potaje', 'fabada'],
-  'Guisos':                ['guiso', 'estofado', 'cocido', 'puchero', 'caldo', 'sopa', 'crema', 'puré', 'caldereta', 'rabo'],
+  'Carnes':                ['pollo', 'pechuga', 'muslo', 'contramuslo', 'alita', 'ternera', 'cerdo', 'cordero', 'pavo', 'conejo', 'costilla', 'albondiga', 'hamburguesa', 'filete', 'chuleta', 'lomo', 'salchicha', 'chorizo', 'carne', 'bistec', 'solomillo', 'secreto', 'pluma', 'jamon', 'bacon', 'panceta', 'cachopo', 'escalope', 'milanesa', 'croqueta', 'pincho', 'brocheta', 'kebab', 'codorniz', 'pato', 'magro', 'morcilla', 'longaniza'],
+  'Pescados y Mariscos':   ['merluza', 'salmon', 'atun', 'bacalao', 'gamba', 'langostino', 'mejillon', 'pulpo', 'calamar', 'sepia', 'dorada', 'lubina', 'sardina', 'boqueron', 'rape', 'pescado', 'marisco', 'trucha', 'lenguado', 'rodaballo', 'caballa', 'anchoa', 'almeja', 'berberecho', 'zamburina', 'vieira', 'bonito', 'gallo', 'pescadilla', 'emperador', 'surimi', 'sushi', 'poke', 'chipiron', 'gulas'],
+  'Verduras y Hortalizas': ['ensalada', 'espinaca', 'brocoli', 'zanahoria', 'calabacin', 'pimiento', 'berenjena', 'tomate', 'lechuga', 'menestra', 'verdura', 'acelga', 'coliflor', 'champinon', 'setas', 'esparrago', 'alcachofa', 'judias verdes', 'pisto', 'gazpacho', 'salmorejo', 'cebolla', 'calabaza', 'puerro', 'repollo'],
+  'Pasta y Arroz':         ['pasta', 'macarron', 'espagueti', 'arroz', 'paella', 'fideua', 'fideo', 'lasana', 'risotto', 'canelon', 'tallarin', 'noqui', 'ravioli', 'tortellini', 'cuscus', 'noodle', 'pizza', 'bocadillo', 'sandwich', 'burrito', 'taco', 'wrap', 'empanada', 'quiche', 'patata', 'puré de patata'],
+  'Legumbres y Cereales':  ['lenteja', 'garbanzo', 'alubia', 'judia', 'fabes', 'potaje', 'fabada', 'habas', 'guisantes', 'soja', 'hummus', 'quinoa', 'bulgur', 'cereales', 'avena'],
+  'Guisos':                ['guiso', 'estofado', 'cocido', 'puchero', 'caldo', 'sopa', 'crema', 'pure', 'caldereta', 'rabo', 'marmitako', 'carrillera', 'ropa vieja', 'olla', 'pote', 'callos', 'albondigas en salsa'],
+  'Comer fuera':           ['restaurante', 'comer fuera', 'fuera', 'menu del dia', 'tapeo', 'tapas', 'pedir', 'takeaway', 'delivery', 'mcdonald', 'burger king', 'telepizza', 'dominos', 'glovo', 'just eat', 'cena fuera', 'comida fuera', 'invitados', 'casa de'],
 }
+
+// En empate gana la categoría "principal" del plato antes que las de acompañamiento
+const MAIN_CATEGORY_ORDER = ['Carnes', 'Pescados y Mariscos', 'Guisos', 'Legumbres y Cereales', 'Pasta y Arroz', 'Comer fuera']
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -160,17 +166,47 @@ function slotRotation(slotId) {
   return (((hash % 1000) / 1000) * 5 - 2.5).toFixed(2)
 }
 
-function getDominantCategory(ingredientIds, allIngredients, dishName) {
-  if (ingredientIds?.length) {
-    const counts = {}
-    for (const id of ingredientIds) {
-      const ing = allIngredients.find((i) => i.id === id)
-      if (ing) counts[ing.category] = (counts[ing.category] || 0) + 1
+function normalizeText(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+}
+
+// Puntuación por categoría según el nombre del plato (coincidencia al inicio de palabra)
+function scoreNameCategories(name) {
+  const n = ` ${normalizeText(name)}`
+  const scores = {}
+  let firstCat = null
+  let firstPos = Infinity
+  for (const [cat, kws] of Object.entries(DISH_KEYWORDS)) {
+    for (const kw of kws) {
+      const pos = n.indexOf(` ${normalizeText(kw)}`)
+      if (pos === -1) continue
+      scores[cat] = (scores[cat] || 0) + 3
+      if (pos < firstPos) { firstPos = pos; firstCat = cat }
     }
-    const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0]
-    if (top) return top
   }
-  return dishName ? guessCategoryFromName(dishName) : null
+  // Lo primero que nombra el plato suele ser lo principal ("Lentejas con chorizo", "Pasta con gambas")
+  if (firstCat) scores[firstCat] += 1.5
+  return scores
+}
+
+function pickTopCategory(scores) {
+  const entries = Object.entries(scores)
+  if (!entries.length) return null
+  const rank = (cat) => { const i = MAIN_CATEGORY_ORDER.indexOf(cat); return i === -1 ? 99 : i }
+  return entries.sort((a, b) => b[1] - a[1] || rank(a[0]) - rank(b[0]))[0][0]
+}
+
+// Combina el nombre (peso alto) con los ingredientes: los ingredientes "principales"
+// (carne, pescado, legumbres, pasta…) pesan más que verduras o condimentos de acompañamiento.
+function getDominantCategory(ingredientIds, allIngredients, dishName) {
+  const scores = dishName ? scoreNameCategories(dishName) : {}
+  for (const id of ingredientIds || []) {
+    const ing = allIngredients.find((i) => i.id === id)
+    if (!ing) continue
+    const w = MAIN_CATEGORY_ORDER.includes(ing.category) ? 1 : 0.3
+    scores[ing.category] = (scores[ing.category] || 0) + w
+  }
+  return pickTopCategory(scores)
 }
 
 function getDominantCategoryColor(ingredientIds, allIngredients) {
@@ -179,11 +215,7 @@ function getDominantCategoryColor(ingredientIds, allIngredients) {
 }
 
 function guessCategoryFromName(name) {
-  const lower = name.toLowerCase()
-  for (const [cat, kws] of Object.entries(DISH_KEYWORDS)) {
-    if (kws.some((kw) => lower.includes(kw))) return cat
-  }
-  return null
+  return pickTopCategory(scoreNameCategories(name))
 }
 
 function guessCategoryForItem(name, ingredients) {
@@ -424,18 +456,151 @@ function PostitContent({ slot, onEdit, onDelete, dragHandleRef, dragListeners, d
 
 // ─── DishModal ────────────────────────────────────────────────────────────────
 
-function DishModal({ mode, slot, dayIdx, slotKey, startDayOfWeek, ingredients, slots, onClose, onSave, onIngredientAdded, savedRecipes = [], initialName = '' }) {
+// Selector de ingredientes reutilizable: buscador + chips. Al elegir un ingrediente el texto
+// se borra y el foco vuelve al buscador para escribir el siguiente. Enter elige el primer resultado.
+function IngredientPicker({ ingredients, selectedIds, onChange, usageCount = {}, onIngredientAdded, onError, children }) {
+  const [search, setSearch] = useState('')
+  const [addingCustom, setAddingCustom] = useState(false)
+  const searchRef = useRef(null)
+
+  // Ordenar por uso DESC, luego alfabético; filtrar por búsqueda
+  const filteredIngredients = useMemo(() => {
+    const q = normalizeText(search).trim()
+    const sorted = [...ingredients].sort((a, b) => {
+      const ua = usageCount[a.id] || 0
+      const ub = usageCount[b.id] || 0
+      if (ub !== ua) return ub - ua
+      return a.name.localeCompare(b.name, 'es')
+    })
+    if (!q) return sorted
+    return sorted.filter((i) => normalizeText(i.name).includes(q))
+  }, [ingredients, usageCount, search])
+
+  const exactMatch = search.trim()
+    ? ingredients.some((i) => normalizeText(i.name) === normalizeText(search).trim())
+    : true
+
+  const clearSearch = () => {
+    setSearch('')
+    searchRef.current?.focus()
+  }
+
+  const toggleIngredient = (id) => {
+    onChange((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+    if (search) clearSearch()
+  }
+
+  const handleAddCustom = async () => {
+    const name = search.trim()
+    if (!name || addingCustom) return
+    setAddingCustom(true)
+    try {
+      const newIng = await dbInsert('v2_ingredients', { name, category: 'Otros', is_custom: true })
+      onIngredientAdded(newIng)
+      onChange((prev) => [...prev, newIng.id])
+      clearSearch()
+    } catch (e) {
+      onError?.('Error al añadir ingrediente: ' + e.message)
+    } finally {
+      setAddingCustom(false)
+    }
+  }
+
+  const handleSearchKey = (e) => {
+    if (e.key !== 'Enter') return
+    e.preventDefault()
+    e.stopPropagation()
+    if (!search.trim()) return
+    const exact = filteredIngredients.find((i) => normalizeText(i.name) === normalizeText(search).trim())
+    const target = exact || filteredIngredients.find((i) => !selectedIds.includes(i.id))
+    if (target) {
+      if (selectedIds.includes(target.id)) clearSearch()
+      else toggleIngredient(target.id)
+    } else if (!exactMatch) {
+      handleAddCustom()
+    }
+  }
+
+  const chip = (ing, selected) => (
+    <button
+      key={ing.id}
+      type="button"
+      className={`chip${selected ? ' selected' : ''}${(usageCount[ing.id] || 0) > 0 ? ' used' : ''}`}
+      onClick={() => toggleIngredient(ing.id)}
+      title={usageCount[ing.id] ? `Usado en ${usageCount[ing.id]} plato(s)` : ''}
+    >
+      {ing.name}
+      {(usageCount[ing.id] || 0) > 0 && <span className="chip-usage">{usageCount[ing.id]}</span>}
+    </button>
+  )
+
+  return (
+    <>
+      <div className="ingredient-search-wrap">
+        <Search size={14} className="ingredient-search-icon" />
+        <input
+          ref={searchRef}
+          className="ingredient-search"
+          placeholder="Buscar ingrediente… (Enter para añadir)"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={handleSearchKey}
+          enterKeyHint="done"
+        />
+        {search && (
+          <button type="button" className="ingredient-search-clear" onClick={clearSearch}>
+            <X size={12} />
+          </button>
+        )}
+      </div>
+
+      <div className="chips-area">
+        {/* Seleccionados arriba (siempre visibles, aunque el filtro no los incluya) */}
+        {ingredients.filter((i) => selectedIds.includes(i.id)).map((ing) => chip(ing, true))}
+
+        {selectedIds.length > 0 && filteredIngredients.some((i) => !selectedIds.includes(i.id)) && (
+          <div className="chips-separator" />
+        )}
+
+        {filteredIngredients.filter((i) => !selectedIds.includes(i.id)).map((ing) => chip(ing, false))}
+
+        {search.trim() && !exactMatch && (
+          <button type="button" className="chip chip-add-custom" onClick={handleAddCustom} disabled={addingCustom}>
+            <Plus size={11} />
+            {addingCustom ? 'Añadiendo…' : `Añadir "${search.trim()}"`}
+          </button>
+        )}
+
+        {filteredIngredients.length === 0 && !search.trim() && (
+          <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>No hay ingredientes</span>
+        )}
+
+        {children}
+      </div>
+
+      {selectedIds.length > 0 && (
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+          {selectedIds.length} ingrediente{selectedIds.length !== 1 ? 's' : ''} seleccionado{selectedIds.length !== 1 ? 's' : ''}
+        </div>
+      )}
+    </>
+  )
+}
+
+function DishModal({ mode, slot, dayIdx, slotKey, startDayOfWeek, ingredients, slots, onClose, onSave, onIngredientAdded, savedRecipes = [], initialName = '', dishIngMap = {} }) {
   const [dishName, setDishName] = useState(mode === 'edit' ? slot.dish_name : initialName)
   const [effort, setEffort] = useState(mode === 'edit' ? (slot.effort_override || 1) : 1)
-  const [selectedIds, setSelectedIds] = useState(mode === 'edit' ? (slot.ingredient_ids || []) : [])
-  const [search, setSearch] = useState('')
+  const [selectedIds, setSelectedIdsRaw] = useState(mode === 'edit' ? (slot.ingredient_ids || []) : [])
+  const [touched, setTouched] = useState(false)
   const [aiLoading, setAiLoading] = useState(false)
-  const [addingCustom, setAddingCustom] = useState(false)
   const [aiNewSuggestions, setAiNewSuggestions] = useState([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const [showSugg, setShowSugg] = useState(false)
   const inputRef = useRef(null)
+
+  // Cualquier cambio manual de ingredientes desactiva la precarga automática
+  const setSelectedIds = (updater) => { setTouched(true); setSelectedIdsRaw(updater) }
 
   const suggestions = useMemo(() => {
     if (!dishName.trim()) return []
@@ -443,9 +608,18 @@ function DishModal({ mode, slot, dayIdx, slotKey, startDayOfWeek, ingredients, s
     return savedRecipes.filter((r) => r.name.toLowerCase().includes(q)).slice(0, 6)
   }, [dishName, savedRecipes])
 
+  // Ingredientes ya guardados para este plato y nivel de esfuerzo
+  const savedIds = dishIngMap[dishName.trim().toLowerCase()]?.[effort] || []
+
   useEffect(() => {
     setTimeout(() => inputRef.current?.focus(), 80)
   }, [])
+
+  // Al añadir un plato que ya conocemos, se precargan sus ingredientes guardados
+  useEffect(() => {
+    if (mode !== 'add' || touched) return
+    setSelectedIdsRaw(savedIds)
+  }, [mode, touched, dishName, effort, dishIngMap])
 
   // Calcular uso de cada ingrediente en los slots actuales
   const usageCount = useMemo(() => {
@@ -457,45 +631,6 @@ function DishModal({ mode, slot, dayIdx, slotKey, startDayOfWeek, ingredients, s
     }
     return map
   }, [slots])
-
-  // Ordenar por uso DESC, luego alfabético; filtrar por búsqueda
-  const filteredIngredients = useMemo(() => {
-    const q = search.toLowerCase().trim()
-    const sorted = [...ingredients].sort((a, b) => {
-      const ua = usageCount[a.id] || 0
-      const ub = usageCount[b.id] || 0
-      if (ub !== ua) return ub - ua
-      return a.name.localeCompare(b.name, 'es')
-    })
-    if (!q) return sorted
-    return sorted.filter((i) => i.name.toLowerCase().includes(q))
-  }, [ingredients, usageCount, search])
-
-  const exactMatch = search.trim()
-    ? ingredients.some((i) => i.name.toLowerCase() === search.toLowerCase().trim())
-    : true
-
-  const toggleIngredient = (id) => {
-    setSelectedIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    )
-  }
-
-  const handleAddCustom = async () => {
-    const name = search.trim()
-    if (!name || addingCustom) return
-    setAddingCustom(true)
-    try {
-      const newIng = await dbInsert('v2_ingredients', { name, category: 'Otros', is_custom: true })
-      onIngredientAdded(newIng)
-      setSelectedIds((prev) => [...prev, newIng.id])
-      setSearch('')
-    } catch (e) {
-      setError('Error al añadir ingrediente: ' + e.message)
-    } finally {
-      setAddingCustom(false)
-    }
-  }
 
   const handleAiSuggest = async () => {
     if (!dishName.trim()) return
@@ -619,80 +754,28 @@ function DishModal({ mode, slot, dayIdx, slotKey, startDayOfWeek, ingredients, s
               </div>
             )}
 
-            {/* Buscador */}
-            <div className="ingredient-search-wrap">
-              <Search size={14} className="ingredient-search-icon" />
-              <input
-                className="ingredient-search"
-                placeholder="Buscar ingrediente…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-              {search && (
-                <button className="ingredient-search-clear" onClick={() => setSearch('')}>
-                  <X size={12} />
-                </button>
-              )}
-            </div>
+            {mode === 'add' && savedIds.length > 0 && (
+              <div className="saved-ingredients-hint">
+                ✓ {savedIds.length} ingrediente{savedIds.length !== 1 ? 's' : ''} guardado{savedIds.length !== 1 ? 's' : ''} de esta receta.
+                Desmarca los que ya tengas en casa para que no vayan a la lista de la compra.
+              </div>
+            )}
 
-            <div className="chips-area">
-              {/* Selected chips at top */}
-              {filteredIngredients.filter((i) => selectedIds.includes(i.id)).map((ing) => (
-                <button
-                  key={ing.id}
-                  className={`chip selected${(usageCount[ing.id] || 0) > 0 ? ' used' : ''}`}
-                  onClick={() => toggleIngredient(ing.id)}
-                  title={usageCount[ing.id] ? `Usado en ${usageCount[ing.id]} plato(s)` : ''}
-                >
-                  {ing.name}
-                  {(usageCount[ing.id] || 0) > 0 && (
-                    <span className="chip-usage">{usageCount[ing.id]}</span>
-                  )}
-                </button>
-              ))}
-
-              {/* Separator between selected and unselected */}
-              {filteredIngredients.some((i) => selectedIds.includes(i.id)) &&
-               filteredIngredients.some((i) => !selectedIds.includes(i.id)) && (
-                <div className="chips-separator" />
-              )}
-
-              {/* Unselected chips */}
-              {filteredIngredients.filter((i) => !selectedIds.includes(i.id)).map((ing) => (
-                <button
-                  key={ing.id}
-                  className={`chip${(usageCount[ing.id] || 0) > 0 ? ' used' : ''}`}
-                  onClick={() => toggleIngredient(ing.id)}
-                  title={usageCount[ing.id] ? `Usado en ${usageCount[ing.id]} plato(s)` : ''}
-                >
-                  {ing.name}
-                  {(usageCount[ing.id] || 0) > 0 && (
-                    <span className="chip-usage">{usageCount[ing.id]}</span>
-                  )}
-                </button>
-              ))}
-
-              {search.trim() && !exactMatch && (
-                <button
-                  className="chip chip-add-custom"
-                  onClick={handleAddCustom}
-                  disabled={addingCustom}
-                >
-                  <Plus size={11} />
-                  {addingCustom ? 'Añadiendo…' : `Añadir "${search.trim()}"`}
-                </button>
-              )}
-
-              {filteredIngredients.length === 0 && !search.trim() && (
-                <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>No hay ingredientes</span>
-              )}
-
+            <IngredientPicker
+              ingredients={ingredients}
+              selectedIds={selectedIds}
+              onChange={setSelectedIds}
+              usageCount={usageCount}
+              onIngredientAdded={onIngredientAdded}
+              onError={setError}
+            >
               {aiNewSuggestions.length > 0 && (
                 <div className="ai-new-section">
                   <span className="ai-new-label">✨ Sugeridos por IA — no están en tu lista</span>
                   {aiNewSuggestions.map((name) => (
                     <button
                       key={name}
+                      type="button"
                       className="chip chip-ai-new"
                       onClick={() => handleAddAiNew(name)}
                     >
@@ -702,13 +785,7 @@ function DishModal({ mode, slot, dayIdx, slotKey, startDayOfWeek, ingredients, s
                   ))}
                 </div>
               )}
-            </div>
-
-            {selectedIds.length > 0 && (
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                {selectedIds.length} ingrediente{selectedIds.length !== 1 ? 's' : ''} seleccionado{selectedIds.length !== 1 ? 's' : ''}
-              </div>
-            )}
+            </IngredientPicker>
           </div>
 
           {error && <div style={{ color: '#dc2626', fontSize: 12 }}>{error}</div>}
@@ -816,7 +893,7 @@ function ShoppingHistoryModal({ history, onClose }) {
 
 // ─── RecipePostit ─────────────────────────────────────────────────────────────
 
-function RecipePostit({ item, onUpdate, onDelete, onSelect, ingredients = [], usageCount = 0 }) {
+function RecipePostit({ item, onUpdate, onDelete, onSelect, onOpenDetail, onCart, ingredients = [], savedIds = [], usageCount = 0 }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({ id: `recipe-${item.id}` })
   const [editing, setEditing] = useState(!item.name)
   const [draft, setDraft] = useState(item.name)
@@ -828,7 +905,7 @@ function RecipePostit({ item, onUpdate, onDelete, onSelect, ingredients = [], us
   useEffect(() => { if (editing) inputRef.current?.focus() }, [editing])
   useEffect(() => { setNotesDraft(item.description || '') }, [item.description])
 
-  const category = getDominantCategory([], ingredients, item.name)
+  const category = item.type || getDominantCategory(savedIds, ingredients, item.name)
   const bgColor = category ? (CATEGORY_PASTELS[category] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
   const rotation = slotRotation(item.id)
   const style = {
@@ -962,16 +1039,243 @@ function RecipePostit({ item, onUpdate, onDelete, onSelect, ingredients = [], us
       )}
 
       <div className="postit-footer">
-        <button
-          className={`postit-btn${hasNotes || notesOpen ? ' notes-active' : ''}`}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => setNotesOpen((o) => !o)}
-          title={notesOpen ? 'Cerrar notas' : 'Notas y etiquetas'}
-        >
-          <Tag size={11} />
-        </button>
+        <div className="recipe-footer-btns">
+          <button
+            className={`postit-btn${hasNotes || notesOpen ? ' notes-active' : ''}`}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => setNotesOpen((o) => !o)}
+            title={notesOpen ? 'Cerrar notas' : 'Notas y etiquetas'}
+          >
+            <Tag size={11} />
+          </button>
+          <button
+            className={`postit-btn${item.steps ? ' notes-active' : ''}`}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => onOpenDetail?.()}
+            title="Tipo, pasos e ingredientes"
+          >
+            <BookOpen size={11} />
+          </button>
+          {savedIds.length > 0 && (
+            <button
+              className="postit-btn recipe-cart-btn"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => onCart?.()}
+              title={`Añadir sus ${savedIds.length} ingredientes a la compra`}
+            >
+              <ShoppingCart size={11} />
+              <span>{savedIds.length}</span>
+            </button>
+          )}
+        </div>
         <div ref={setActivatorNodeRef} {...listeners} {...attributes} className="drag-handle" title="Arrastrar al tablero">
           <GripVertical size={12} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── RecipeDetailModal ─────────────────────────────────────────────────────────
+
+// Ingredientes guardados de un plato: el primer nivel de esfuerzo que tenga alguno
+function savedIngredientIds(dishIngMap, name, preferredEffort) {
+  const byEffort = dishIngMap[(name || '').trim().toLowerCase()] || {}
+  if (preferredEffort && byEffort[preferredEffort]?.length) return byEffort[preferredEffort]
+  for (const e of [1, 2, 3]) if (byEffort[e]?.length) return byEffort[e]
+  return []
+}
+
+function RecipeDetailModal({ recipe, ingredients, dishIngMap, onClose, onSave, onIngredientAdded, onCart }) {
+  const [effort, setEffort] = useState(() => {
+    const byEffort = dishIngMap[(recipe.name || '').trim().toLowerCase()] || {}
+    return [1, 2, 3].find((e) => byEffort[e]?.length) || 1
+  })
+  const [selectedIds, setSelectedIds] = useState(() => savedIngredientIds(dishIngMap, recipe.name))
+  const [type, setType] = useState(recipe.type || '')
+  const [steps, setSteps] = useState(recipe.steps || '')
+  const [aiLoading, setAiLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+
+  const autoType = getDominantCategory(selectedIds, ingredients, recipe.name)
+
+  const changeEffort = (n) => {
+    setEffort(n)
+    setSelectedIds(dishIngMap[(recipe.name || '').trim().toLowerCase()]?.[n] || [])
+  }
+
+  const handleAiSteps = async () => {
+    setAiLoading(true)
+    setError(null)
+    try {
+      setSteps(await callGeminiRecipe(recipe.name))
+    } catch (e) {
+      setError('Error al contactar la IA: ' + e.message)
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
+  const handleSave = async () => {
+    if (saving) return
+    setSaving(true)
+    setError(null)
+    try {
+      await onSave({ recipe, effort, ingredientIds: selectedIds, type, steps })
+      onClose()
+    } catch (e) {
+      setError(e.message)
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="modal-header">
+          <h3>📖 {titleCase(recipe.name)}</h3>
+          <button className="modal-close" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body">
+          {/* Tipo de plato */}
+          <div className="form-field">
+            <label className="form-label">Tipo de plato</label>
+            <div className="type-selector">
+              <button
+                type="button"
+                className={`type-btn${type === '' ? ' selected' : ''}`}
+                onClick={() => setType('')}
+              >
+                ✨ Automático{autoType && type === '' ? `: ${FOOD_TYPES.find((f) => f.key === autoType)?.label || autoType}` : ''}
+              </button>
+              {FOOD_TYPES.map((ft) => (
+                <button
+                  key={ft.key}
+                  type="button"
+                  className={`type-btn${type === ft.key ? ' selected' : ''}`}
+                  style={type === ft.key ? { background: CATEGORY_PASTELS[ft.key], borderColor: CATEGORY_COLORS[ft.key] } : {}}
+                  onClick={() => setType(ft.key)}
+                >
+                  {ft.emoji} {ft.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Pasos */}
+          <div className="form-field">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <label className="form-label">Pasos</label>
+              <button type="button" className="ai-suggest-btn" onClick={handleAiSteps} disabled={aiLoading}>
+                <Sparkles size={13} />
+                {aiLoading ? 'Consultando IA…' : 'Generar con IA'}
+              </button>
+            </div>
+            <textarea
+              className="recipe-steps-input"
+              placeholder={'1. Sofreír la cebolla\n2. Añadir el arroz…'}
+              value={steps}
+              onChange={(e) => setSteps(e.target.value)}
+              rows={6}
+            />
+          </div>
+
+          {/* Ingredientes */}
+          <div className="form-field">
+            <label className="form-label">Ingredientes guardados</label>
+            <div className="effort-selector" style={{ marginBottom: 8 }}>
+              {[1, 2, 3].map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  className={`effort-btn${effort === n ? ` selected-${n}` : ''}`}
+                  onClick={() => changeEffort(n)}
+                >
+                  {EFFORT_LABELS[n]}
+                </button>
+              ))}
+            </div>
+            <IngredientPicker
+              ingredients={ingredients}
+              selectedIds={selectedIds}
+              onChange={setSelectedIds}
+              onIngredientAdded={onIngredientAdded}
+              onError={setError}
+            />
+          </div>
+
+          {error && <div style={{ color: '#dc2626', fontSize: 12 }}>{error}</div>}
+        </div>
+        <div className="modal-footer">
+          <button
+            className="btn btn-ghost"
+            onClick={() => onCart(recipe, selectedIds)}
+            disabled={selectedIds.length === 0}
+            title="Elegir qué ingredientes añadir a la lista de la compra"
+          >
+            <ShoppingCart size={14} /> Al carrito
+          </button>
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+            {saving ? 'Guardando…' : 'Guardar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── RecipeCartModal ───────────────────────────────────────────────────────────
+
+function RecipeCartModal({ recipe, ingredientIds, ingredients, onClose, onConfirm }) {
+  const items = ingredientIds
+    .map((id) => ingredients.find((i) => i.id === id))
+    .filter(Boolean)
+    .sort((a, b) => a.name.localeCompare(b.name, 'es'))
+  const [checked, setChecked] = useState(() => new Set(items.map((i) => i.id)))
+
+  const toggle = (id) => setChecked((prev) => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  })
+
+  return (
+    <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="modal-header">
+          <h3>🛒 {titleCase(recipe.name)}</h3>
+          <button className="modal-close" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body">
+          <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 8 }}>
+            Elige qué ingredientes añadir a la lista de la compra de esta semana. Desmarca los que ya tengas.
+          </p>
+          {items.length === 0 ? (
+            <p style={{ fontSize: 13 }}>Esta receta aún no tiene ingredientes guardados.</p>
+          ) : (
+            <div className="cart-ingredient-list">
+              {items.map((ing) => (
+                <label key={ing.id} className="cart-ingredient">
+                  <input type="checkbox" checked={checked.has(ing.id)} onChange={() => toggle(ing.id)} />
+                  <span>{titleCase(ing.name)}</span>
+                  <span className="cart-ingredient-cat">{ing.category}</span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button
+            className="btn btn-primary"
+            disabled={checked.size === 0}
+            onClick={() => onConfirm(items.filter((i) => checked.has(i.id)))}
+          >
+            Añadir {checked.size} a la compra
+          </button>
         </div>
       </div>
     </div>
@@ -1091,7 +1395,7 @@ function AutoMenuModal({ slots, poolItems, savedRecipes, ingredients, weekKey, n
 
 // ─── PoolPostit ───────────────────────────────────────────────────────────────
 
-function PoolPostit({ item, ingredients, onUpdate, onDelete, onContextMenu }) {
+function PoolPostit({ item, ingredients, onUpdate, onDelete, onContextMenu, typeOverride = null, savedIds = [] }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({ id: `pool-${item.id}` })
   const [editing, setEditing] = useState(!item.dish_name)
   const [draft, setDraft] = useState(item.dish_name)
@@ -1099,7 +1403,7 @@ function PoolPostit({ item, ingredients, onUpdate, onDelete, onContextMenu }) {
 
   useEffect(() => { if (editing) inputRef.current?.focus() }, [editing])
 
-  const category = getDominantCategory([], ingredients, item.dish_name)
+  const category = typeOverride || getDominantCategory(savedIds, ingredients, item.dish_name)
   const bgColor = category ? (CATEGORY_PASTELS[category] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
   const rotation = slotRotation(item.id)
 
@@ -1684,6 +1988,30 @@ export default function App() {
   const [recipeSort, setRecipeSort] = useState('recent')
   const [selectedTag, setSelectedTag] = useState(null)
   const [autoMenuOpen, setAutoMenuOpen] = useState(false)
+  const [recipeReverse, setRecipeReverse] = useState(false)
+  const [dishIngMap, setDishIngMap] = useState({})
+  const [recipeDetailId, setRecipeDetailId] = useState(null)
+  const [cartRecipeId, setCartRecipeId] = useState(null)
+  const [cartIdsOverride, setCartIdsOverride] = useState(null)
+
+  // nombre de plato (minúsculas) → { nivelEsfuerzo: [ids de ingredientes] }
+  async function loadDishIngMap() {
+    try {
+      const [dishes, dishIngs] = await Promise.all([dbGet('v2_dishes'), dbGet('v2_dish_ingredients')])
+      const nameById = Object.fromEntries(dishes.map((d) => [d.id, d.name.toLowerCase()]))
+      const map = {}
+      for (const di of dishIngs) {
+        const n = nameById[di.dish_id]
+        if (!n) continue
+        if (!map[n]) map[n] = {}
+        if (!map[n][di.effort_level]) map[n][di.effort_level] = []
+        map[n][di.effort_level].push(di.ingredient_id)
+      }
+      setDishIngMap(map)
+    } catch (e) {
+      console.error('Error al cargar ingredientes guardados:', e)
+    }
+  }
 
   const initDone = useRef(false)
 
@@ -1789,6 +2117,7 @@ export default function App() {
   }
 
   async function loadAllSlots() {
+    loadDishIngMap()
     try {
       const { data: boardSlots, error } = await supabase.from('v2_board_slots').select('*')
       if (error) throw error
@@ -1817,6 +2146,8 @@ export default function App() {
     setIngredients((prev) => [...prev, newIng])
   }
 
+  // selectedIds === null → conservar los ingredientes que el plato ya tiene guardados
+  // (así arrastrar un plato desde la despensa o el menú automático no los borra)
   async function handleSaveDish({ dishName, effort, selectedIds, dayIdx, slotKey }) {
     let dish
     const existing = await dbGet('v2_dishes', { name: dishName })
@@ -1830,15 +2161,19 @@ export default function App() {
       dish_id: dish.id,
       effort_level: effort,
     })
-    for (const di of currentDishIngs) {
-      await dbDelete('v2_dish_ingredients', di.id)
-    }
-    for (const ingId of selectedIds) {
-      await dbInsert('v2_dish_ingredients', {
-        dish_id: dish.id,
-        ingredient_id: ingId,
-        effort_level: effort,
-      })
+    if (selectedIds == null) {
+      selectedIds = currentDishIngs.map((di) => di.ingredient_id)
+    } else {
+      for (const di of currentDishIngs) {
+        await dbDelete('v2_dish_ingredients', di.id)
+      }
+      for (const ingId of selectedIds) {
+        await dbInsert('v2_dish_ingredients', {
+          dish_id: dish.id,
+          ingredient_id: ingId,
+          effort_level: effort,
+        })
+      }
     }
 
     addToSavedRecipes(dishName)
@@ -1930,7 +2265,7 @@ export default function App() {
     if (!movingSlot) return
     try {
       if (movingSlot.isPool) {
-        await handleSaveDish({ dishName: movingSlot.dish_name, effort: 1, selectedIds: [], dayIdx, slotKey })
+        await handleSaveDish({ dishName: movingSlot.dish_name, effort: 1, selectedIds: null, dayIdx, slotKey })
         deletePoolItem(movingSlot.id)
       } else {
         const absIdx = (startDayOfWeek + dayIdx) % 7
@@ -1972,11 +2307,40 @@ export default function App() {
     })
   }
 
+  // Guarda tipo y pasos en la receta, y sus ingredientes en el plato con el mismo nombre
+  // (la misma tabla que usa el menú, así los ingredientes se reutilizan al añadirla al tablero).
+  async function handleSaveRecipeDetail({ recipe, effort, ingredientIds, type, steps }) {
+    const name = recipe.name.trim()
+    const existing = await dbGet('v2_dishes', { name })
+    const dish = existing[0] || await dbInsert('v2_dishes', { name, effort_default: effort })
+    const current = await dbGet('v2_dish_ingredients', { dish_id: dish.id, effort_level: effort })
+    const keep = new Set(ingredientIds)
+    const have = new Set(current.map((di) => di.ingredient_id))
+    for (const di of current) {
+      if (!keep.has(di.ingredient_id)) await dbDelete('v2_dish_ingredients', di.id)
+    }
+    for (const ingId of ingredientIds) {
+      if (!have.has(ingId)) {
+        await dbInsert('v2_dish_ingredients', { dish_id: dish.id, ingredient_id: ingId, effort_level: effort })
+      }
+    }
+    await updateRecipe(recipe.id, { type: type || null, steps: steps.trim() || null })
+    await loadDishIngMap()
+    loadSlots()
+    showToast('Receta guardada ✓')
+  }
+
+  function handleRecipeToCart(selected) {
+    for (const ing of selected) addCustomItemRow({ name: ing.name, category: ing.category || 'Otros' })
+    setCartRecipeId(null)
+    showToast(`${selected.length} ingrediente${selected.length !== 1 ? 's' : ''} añadido${selected.length !== 1 ? 's' : ''} a la compra`)
+  }
+
   async function handleAutoMenuConfirm(proposals) {
     setAutoMenuOpen(false)
     for (const p of proposals) {
       try {
-        await handleSaveDish({ dishName: p.dishName, effort: 1, selectedIds: [], dayIdx: p.displayDay, slotKey: p.slotKey })
+        await handleSaveDish({ dishName: p.dishName, effort: 1, selectedIds: null, dayIdx: p.displayDay, slotKey: p.slotKey })
       } catch (e) {
         console.error('Error al guardar plato sugerido:', e)
       }
@@ -2055,7 +2419,7 @@ export default function App() {
         await handleSaveDish({
           dishName: poolItem.dish_name,
           effort: poolItem.effort || 1,
-          selectedIds: [],
+          selectedIds: null,
           slot: null,
           dayIdx: newDisplayDay,
           slotKey: newSlotKey,
@@ -2212,7 +2576,22 @@ export default function App() {
   }
 
   const activeSlot = activeId ? slots.find((s) => s.id === activeId) : null
-  const dietWarnings = useMemo(() => getDietWarnings(slots, ingredients, colorOverrides, startDayOfWeek, weekKey, nextWeekKey), [slots, ingredients, colorOverrides, startDayOfWeek, weekKey, nextWeekKey])
+  // Tipo de plato fijado en la receta (tiene prioridad sobre la detección automática);
+  // el cambio manual por postit (menú contextual) tiene prioridad sobre ambos.
+  const recipeTypeByName = useMemo(() => {
+    const m = {}
+    for (const r of savedRecipes) if (r.type && r.name) m[r.name.trim().toLowerCase()] = r.type
+    return m
+  }, [savedRecipes])
+  const effectiveOverrides = useMemo(() => {
+    const m = {}
+    for (const s of slots) {
+      const t = recipeTypeByName[(s.dish_name || '').trim().toLowerCase()]
+      if (t) m[s.id] = t
+    }
+    return { ...m, ...colorOverrides }
+  }, [slots, recipeTypeByName, colorOverrides])
+  const dietWarnings = useMemo(() => getDietWarnings(slots, ingredients, effectiveOverrides, startDayOfWeek, weekKey, nextWeekKey), [slots, ingredients, effectiveOverrides, startDayOfWeek, weekKey, nextWeekKey])
 
   const recipeUsageCount = useMemo(() => {
     const count = {}
@@ -2242,19 +2621,24 @@ export default function App() {
       const q = recipeSearch.toLowerCase()
       result = result.filter((r) => r.name.toLowerCase().includes(q))
     }
+    const byName = (a, b) => a.name.localeCompare(b.name, 'es')
     if (recipeSort === 'az') {
-      result = [...result].sort((a, b) => a.name.localeCompare(b.name, 'es'))
+      result = [...result].sort(byName)
     } else if (recipeSort === 'category') {
       result = [...result].sort((a, b) => {
-        const catA = getDominantCategory([], ingredients, a.name) || 'Ω'
-        const catB = getDominantCategory([], ingredients, b.name) || 'Ω'
-        return catA.localeCompare(catB, 'es') || a.name.localeCompare(b.name, 'es')
+        const catA = a.type || getDominantCategory([], ingredients, a.name) || 'Ω'
+        const catB = b.type || getDominantCategory([], ingredients, b.name) || 'Ω'
+        return catA.localeCompare(catB, 'es') || byName(a, b)
       })
     } else if (recipeSort === 'rating') {
-      result = [...result].sort((a, b) => (b.rating || 0) - (a.rating || 0) || a.name.localeCompare(b.name, 'es'))
+      result = [...result].sort((a, b) => (b.rating || 0) - (a.rating || 0) || byName(a, b))
+    } else {
+      // Recientes: las más nuevas primero (los ids son marcas de tiempo)
+      const stamp = (r) => Number(r.id) || new Date(r.created_at || 0).getTime()
+      result = [...result].sort((a, b) => stamp(b) - stamp(a))
     }
-    return result
-  }, [savedRecipes, recipeSearch, recipeSort, ingredients, selectedTag])
+    return recipeReverse ? [...result].reverse() : result
+  }, [savedRecipes, recipeSearch, recipeSort, recipeReverse, ingredients, selectedTag])
 
   if (!authReady) return null
   if (!currentUser) return <LoginScreen />
@@ -2364,7 +2748,7 @@ export default function App() {
                             key={s.id}
                             slot={s}
                             ingredients={ingredients}
-                            colorOverrides={colorOverrides}
+                            colorOverrides={effectiveOverrides}
                             onEdit={() => setEditModal(s)}
                             onDelete={handleDelete}
                             onContextMenu={(e, slot) => setContextMenu({ x: e.clientX, y: e.clientY, slot })}
@@ -2413,7 +2797,7 @@ export default function App() {
                 }
                 const s = slots.find((x) => x.id === activeId)
                 if (!s) return null
-                const cat = colorOverrides[s.id] || getDominantCategory(s.ingredient_ids, ingredients, s.dish_name)
+                const cat = effectiveOverrides[s.id] || getDominantCategory(s.ingredient_ids, ingredients, s.dish_name)
                 const bg = cat ? (CATEGORY_PASTELS[cat] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
                 return <div className="postit-overlay" style={{ background: bg }}><span className="postit-name">{titleCase(s.dish_name)}</span></div>
               })()}
@@ -2473,6 +2857,8 @@ export default function App() {
                       key={item.id}
                       item={item}
                       ingredients={ingredients}
+                      typeOverride={recipeTypeByName[(item.dish_name || '').trim().toLowerCase()] || null}
+                      savedIds={savedIngredientIds(dishIngMap, item.dish_name, item.effort)}
                       onUpdate={(updated) => updatePoolItem(item.id, { dish_name: updated.dish_name })}
                       onDelete={() => deletePoolItem(item.id)}
                       onContextMenu={(e, slot) => setContextMenu({ x: e.clientX, y: e.clientY, slot, isPool: true })}
@@ -2508,9 +2894,16 @@ export default function App() {
                       onChange={(e) => setRecipeSearch(e.target.value)}
                     />
                     <div className="recipe-sort-btns">
-                      {[['recent', '↕ Recientes'], ['az', 'A–Z'], ['category', 'Categoría'], ['rating', '⭐ Valoración']].map(([key, label]) => (
+                      {[['recent', 'Recientes'], ['az', 'A–Z'], ['category', 'Categoría'], ['rating', '⭐ Valoración']].map(([key, label]) => (
                         <button key={key} className={`recipe-sort-btn${recipeSort === key ? ' active' : ''}`} onClick={() => setRecipeSort(key)}>{label}</button>
                       ))}
+                      <button
+                        className="recipe-sort-btn recipe-sort-dir"
+                        onClick={() => setRecipeReverse((r) => !r)}
+                        title={recipeReverse ? 'Orden invertido (pulsa para volver al normal)' : 'Invertir el orden'}
+                      >
+                        {recipeReverse ? '↑' : '↓'}
+                      </button>
                     </div>
                   </div>
                 )}
@@ -2523,7 +2916,10 @@ export default function App() {
                       key={recipe.id}
                       item={recipe}
                       ingredients={ingredients}
+                      savedIds={savedIngredientIds(dishIngMap, recipe.name)}
                       usageCount={recipeUsageCount[recipe.name?.toLowerCase()] || 0}
+                      onOpenDetail={() => setRecipeDetailId(recipe.id)}
+                      onCart={() => setCartRecipeId(recipe.id)}
                       onSelect={() => { if (recipe.name) { setPendingRecipeName(recipe.name); setTrayTab('pool') } }}
                       onUpdate={(patch) => updateRecipe(recipe.id, patch)}
                       onDelete={() => deleteRecipe(recipe.id)}
@@ -2675,6 +3071,7 @@ export default function App() {
           onIngredientAdded={handleIngredientAdded}
           savedRecipes={savedRecipes}
           initialName={addModal.initialName || ''}
+          dishIngMap={dishIngMap}
         />
       )}
       {editModal && (
@@ -2730,6 +3127,28 @@ export default function App() {
           savedRecipes={savedRecipes}
           onClose={() => setAiProposalsOpen(false)}
           onAdd={(name) => { addToSavedRecipes(name); showToast(`"${titleCase(name)}" añadida a recetas`) }}
+        />
+      )}
+
+      {recipeDetailId && savedRecipes.find((r) => r.id === recipeDetailId) && (
+        <RecipeDetailModal
+          recipe={savedRecipes.find((r) => r.id === recipeDetailId)}
+          ingredients={ingredients}
+          dishIngMap={dishIngMap}
+          onClose={() => setRecipeDetailId(null)}
+          onSave={handleSaveRecipeDetail}
+          onIngredientAdded={handleIngredientAdded}
+          onCart={(recipe, ids) => { setRecipeDetailId(null); setCartRecipeId(recipe.id); setCartIdsOverride(ids) }}
+        />
+      )}
+
+      {cartRecipeId && savedRecipes.find((r) => r.id === cartRecipeId) && (
+        <RecipeCartModal
+          recipe={savedRecipes.find((r) => r.id === cartRecipeId)}
+          ingredientIds={cartIdsOverride || savedIngredientIds(dishIngMap, savedRecipes.find((r) => r.id === cartRecipeId).name)}
+          ingredients={ingredients}
+          onClose={() => { setCartRecipeId(null); setCartIdsOverride(null) }}
+          onConfirm={(selected) => { handleRecipeToCart(selected); setCartIdsOverride(null) }}
         />
       )}
 
