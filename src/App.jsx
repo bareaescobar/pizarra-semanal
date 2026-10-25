@@ -8,6 +8,8 @@ import {
   useSensors,
   useDroppable,
   useDraggable,
+  pointerWithin,
+  rectIntersection,
 } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import {
@@ -37,9 +39,17 @@ import {
   CalendarDays,
   CalendarPlus,
   Package,
+  Settings,
 } from 'lucide-react'
 import supabase, { dbGet, dbInsert, dbUpdate, dbDelete } from './supabase.js'
 import { INGREDIENT_CATEGORIES, DEFAULT_INGREDIENTS } from './ingredients.js'
+
+// El destino de un arrastre lo decide dónde está el cursor (las tarjetas del panel son anchas y por solape
+// de rectángulos se caía en la celda equivocada); si el cursor no está sobre ninguna, se usa el solape.
+function collisionByPointer(args) {
+  const hits = pointerWithin(args)
+  return hits.length ? hits : rectIntersection(args)
+}
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -48,6 +58,7 @@ const SLOTS = [
   { key: 'lunch', label: 'Comida' },
   { key: 'dinner', label: 'Cena' },
 ]
+const EFFORT_NAMES = { 1: 'Fácil', 2: 'Medio', 3: 'Casero' }
 const EFFORT_LABELS = { 1: '🟢 Fácil', 2: '🟡 Medio', 3: '🔴 Casero' }
 
 const CATEGORY_COLORS = {
@@ -112,16 +123,21 @@ const MAIN_CATEGORY_ORDER = ['Carnes', 'Pescados y Mariscos', 'Guisos', 'Legumbr
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+// Id único: la hora en milisegundos sola se repite al crear varios elementos en el mismo instante
+function newId() {
+  return Date.now().toString() + Math.floor(Math.random() * 1000).toString().padStart(3, '0')
+}
+
 async function sha256Hex(text) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+// Frase: solo la primera letra en mayúscula ("Merluza al horno")
 function titleCase(str) {
   if (!str) return ''
-  return String(str)
-    .toLocaleLowerCase('es')
-    .replace(/(^|\s|[-/])([\p{L}])/gu, (_, sep, ch) => sep + ch.toLocaleUpperCase('es'))
+  const t = String(str).trim().toLocaleLowerCase('es')
+  return t.charAt(0).toLocaleUpperCase('es') + t.slice(1)
 }
 
 // startDayOfWeek: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
@@ -442,11 +458,7 @@ function PostitContent({ slot, onEdit, onDelete, onOpen, onMenu, dragHandleRef, 
         </div>
       </div>
       <div className="postit-footer">
-        <div className="effort-dots">
-          {[1, 2, 3].map((n) => (
-            <div key={n} className={`effort-dot${n <= effort ? ` active-${effort}` : ''}`} />
-          ))}
-        </div>
+        <span className={`effort-pill effort-${effort}`} title="Nivel de esfuerzo">{EFFORT_NAMES[effort] || 'Fácil'}</span>
         {onMenu && (
           <button
             className="postit-btn postit-more-touch"
@@ -627,8 +639,9 @@ function DishModal({ mode, slot, dayIdx, slotKey, startDayOfWeek, ingredients, s
 
   const suggestions = useMemo(() => {
     if (!dishName.trim()) return []
-    const q = dishName.toLowerCase()
-    return savedRecipes.filter((r) => r.name.toLowerCase().includes(q)).slice(0, 6)
+    const q = dishName.trim().toLowerCase()
+    // No se sugiere lo que ya está escrito tal cual (en "Editar plato" salía el propio nombre tapando el formulario)
+    return savedRecipes.filter((r) => { const n = (r.name || '').toLowerCase(); return n.includes(q) && n !== q }).slice(0, 6)
   }, [dishName, savedRecipes])
 
   // Ingredientes ya guardados para este plato y nivel de esfuerzo
@@ -2228,6 +2241,43 @@ function LoginScreen() {
 
 // ─── AIRecipeProposalsModal ──────────────────────────────────────────────────
 
+// Progreso mientras la IA trabaja: tiempo transcurrido, mensajes por fases y huecos de las tarjetas
+function ProposalProgress({ count, onCancel }) {
+  const [secs, setSecs] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setSecs((n) => n + 1), 1000)
+    return () => clearInterval(id)
+  }, [])
+  const phases = [
+    'Eligiendo platos que encajen con tus filtros…',
+    'Combinando ingredientes y comprobando tiempos…',
+    'Escribiendo ingredientes y pasos…',
+    'Ajustando etiquetas y últimos detalles…',
+    'Casi listo, la IA está tardando un poco más de lo normal…',
+  ]
+  const phase = phases[Math.min(phases.length - 1, Math.floor(secs / 6))]
+  return (
+    <div className="proposal-progress" role="status" aria-live="polite">
+      <div className="proposal-progress-head">
+        <div className="spinner" />
+        <div>
+          <strong>{phase}</strong>
+          <div className="proposal-progress-sub">
+            {secs} s · generando {count} plato{count !== 1 ? 's' : ''} con IA, puede tardar un poco
+          </div>
+        </div>
+      </div>
+      <div className="proposal-progress-bar"><div /></div>
+      {Array.from({ length: Math.min(count, 5) }, (_, i) => (
+        <div key={i} className="proposal-skeleton" style={{ animationDelay: `${i * 0.15}s` }}>
+          <div className="sk-line sk-title" /><div className="sk-line" /><div className="sk-line sk-short" />
+        </div>
+      ))}
+      <button className="btn btn-ghost" type="button" onClick={onCancel}>Cancelar</button>
+    </div>
+  )
+}
+
 const AI_DEFAULT_PREFS = {
   count: 5,
   meal: '',
@@ -2258,7 +2308,7 @@ const AI_PRESETS = [
 
 const LIGHT_LABELS = { ligero: '🥗 Ligero', equilibrado: '⚖️ Equilibrado', contundente: '🍖 Contundente' }
 
-function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClose, onAdd, hidden = false, tabs = null }) {
+function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClose, onAdd, onPlan, onGoMenu, hidden = false, tabs = null }) {
   const [step, setStep] = useState('form') // 'form' | 'list'
   const [prefs, setPrefs] = useState(AI_DEFAULT_PREFS)
   const [showIngredients, setShowIngredients] = useState(false)
@@ -2267,6 +2317,7 @@ function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClo
   const [open, setOpen] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const reqRef = useRef(0) // para descartar el resultado si se cancela
 
   const set = (patch) => setPrefs((p) => ({ ...p, ...patch }))
   const toggleStyle = (group, option) => setPrefs((p) => {
@@ -2279,11 +2330,20 @@ function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClo
     else set(preset.apply)
   }
 
+  function cancelGenerate() {
+    reqRef.current += 1
+    setLoading(false)
+    setStep('form')
+  }
+
   async function handleGenerate() {
+    const myReq = ++reqRef.current
     setLoading(true)
     setError(null)
     setAdded(new Set())
     setOpen(null)
+    setProposals([])
+    setStep('list') // se muestra enseguida el progreso en lugar de dejar el formulario "colgado"
     try {
       const availableNames = prefs.available.map((id) => ingredients.find((i) => i.id === id)?.name).filter(Boolean)
       const { proposals: list } = await callAI('proposals', {
@@ -2302,12 +2362,13 @@ function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClo
         },
         history: savedRecipes.map((r) => r.name).filter(Boolean),
       })
+      if (reqRef.current !== myReq) return
       setProposals(list)
-      setStep('list')
     } catch (e) {
+      if (reqRef.current !== myReq) return
       setError(e.message)
     } finally {
-      setLoading(false)
+      if (reqRef.current === myReq) setLoading(false)
     }
   }
 
@@ -2434,8 +2495,8 @@ function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClo
           {step === 'list' && (
             <>
               {loading ? (
-                <div className="ai-loading"><div className="spinner" />Consultando IA…</div>
-              ) : proposals.length === 0 ? (
+                <ProposalProgress count={prefs.count} onCancel={cancelGenerate} />
+              ) : proposals.length === 0 && !error ? (
                 <p>Sin propuestas. Vuelve al formulario.</p>
               ) : (
                 <div className="proposal-list">
@@ -2463,12 +2524,29 @@ function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClo
                         <button className="btn btn-ghost" type="button" onClick={() => setOpen(open === i ? null : i)}>
                           {open === i ? 'Ocultar' : 'Ver receta'}
                         </button>
-                        <button className="btn btn-primary" type="button" disabled={added.has(i)} onClick={() => addOne(p, i)}>
-                          {added.has(i) ? '✓ Añadida' : <><Plus size={12} /> Añadir a recetas</>}
-                        </button>
+                        {added.has(i) ? (
+                          <>
+                            <span className="proposal-added">✓ En tus recetas</span>
+                            <button className="btn btn-primary" type="button" onClick={() => onPlan?.(p.name)}>
+                              <CalendarPlus size={13} /> Añadir al menú
+                            </button>
+                          </>
+                        ) : (
+                          <button className="btn btn-primary" type="button" onClick={() => addOne(p, i)}>
+                            <Plus size={12} /> Añadir a recetas
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+              {!loading && proposals.length > 1 && added.size === proposals.length && (
+                <div className="proposal-next">
+                  ✓ Las {proposals.length} recetas ya están en tu recetario. ¿Quieres colocarlas en el menú de la semana?
+                  <button className="btn btn-primary" type="button" onClick={() => onGoMenu?.()}>
+                    <CalendarDays size={13} /> Planificar el menú
+                  </button>
                 </div>
               )}
               {error && <div style={{ color: '#dc2626', fontSize: 12 }}>{error}</div>}
@@ -2528,7 +2606,7 @@ function PlanPicker({ title, startDayOfWeek, weekKey, initialDay = 0, onClose, o
   const [day, setDay] = useState(initialDay)
   const [slotKey, setSlotKey] = useState('lunch')
   return (
-    <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="modal-backdrop plan-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal plan-picker">
         <div className="modal-header">
           <h3>{title}</h3>
@@ -2625,7 +2703,7 @@ export default function App() {
     try { setPoolItems(await dbGet('v2_pool_items')) } catch {}
   }
   async function addPoolItem(item) {
-    const row = { id: Date.now().toString(), dish_name: '', effort: 1, ...item }
+    const row = { id: newId(), dish_name: '', effort: 1, ...item }
     setPoolItems((prev) => [...prev, row])
     try { await dbInsert('v2_pool_items', row) } catch { reloadPool() }
   }
@@ -2642,7 +2720,7 @@ export default function App() {
     try { setSavedRecipes(await dbGet('v2_saved_recipes')) } catch {}
   }
   async function addRecipe(name = '') {
-    const row = { id: Date.now().toString(), name }
+    const row = { id: newId(), name }
     setSavedRecipes((prev) => [...prev, row])
     try { await dbInsert('v2_saved_recipes', row) } catch { reloadRecipes() }
     return row.id
@@ -2673,9 +2751,22 @@ export default function App() {
     try { setCustomItems(await dbGet('v2_custom_items', { week_key: weekKey })) } catch {}
   }
   async function addCustomItemRow(item) {
-    const row = { id: Date.now().toString(), week_key: weekKey, ...item }
+    const row = { id: newId(), week_key: weekKey, ...item }
     setCustomItems((prev) => [...prev, row])
     try { await dbInsert('v2_custom_items', row) } catch { reloadCustomItems() }
+  }
+  // Varios artículos a la vez: una sola escritura (así no pueden pisarse entre sí)
+  async function addCustomItemRows(items) {
+    if (!items.length) return
+    const rows = items.map((item) => ({ id: newId(), week_key: weekKey, ...item }))
+    setCustomItems((prev) => [...prev, ...rows])
+    try {
+      const { error } = await supabase.from('v2_custom_items').insert(rows)
+      if (error) throw error
+    } catch (e) {
+      showToast('No se pudieron guardar los artículos: ' + (e.message || 'error'))
+      reloadCustomItems()
+    }
   }
   async function removeCustomItemRow(id) {
     setCustomItems((prev) => prev.filter((i) => i.id !== id))
@@ -2751,7 +2842,28 @@ export default function App() {
     } catch { reloadColorOverrides() }
   }
 
-  const [trayTab, setTrayTab] = useState('pool')
+  const [trayTab, setTrayTab] = useState(() => { try { const v = localStorage.getItem('panelTab'); return v === 'recipes' ? 'recipes' : 'pool' } catch { return 'pool' } })
+  // Panel derecho (escritorio): pestañas Compra / Despensa / Recetas, plegable; se recuerda lo último que se usó
+  const [panelOpen, setPanelOpen] = useState(() => { try { const v = localStorage.getItem('panelOpen'); return v === null ? window.innerWidth >= 1300 : v === '1' } catch { return true } })
+  const setPanelOpenPersist = (v) => { setPanelOpen(v); try { localStorage.setItem('panelOpen', v ? '1' : '0') } catch {} }
+  const [panelTab, setPanelTabRaw] = useState(() => { try { const v = localStorage.getItem('panelTab'); return ['shop', 'pool', 'recipes'].includes(v) ? v : 'shop' } catch { return 'shop' } })
+  const choosePanelTab = (tab) => {
+    setPanelTabRaw(tab)
+    if (tab !== 'shop') setTrayTab(tab)
+    setPanelOpenPersist(true)
+    try { localStorage.setItem('panelTab', tab) } catch {}
+  }
+  // Si otra parte de la app cambia la pestaña de la bandeja (p. ej. al arrastrar a recetas), el panel la sigue
+  useEffect(() => {
+    if (panelTab !== 'shop' && panelTab !== trayTab) setPanelTabRaw(trayTab)
+  }, [trayTab]) // eslint-disable-line react-hooks/exhaustive-deps
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  useEffect(() => {
+    if (!settingsOpen) return
+    const close = (e) => { if (!e.target.closest?.('.settings-wrap')) setSettingsOpen(false) }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [settingsOpen])
   const [pendingRecipeName, setPendingRecipeName] = useState(null)
   const [recipeSearch, setRecipeSearch] = useState('')
   const [recipeSort, setRecipeSort] = useState(() => { try { return localStorage.getItem('recipeSort') || 'recent' } catch { return 'recent' } })
@@ -3186,7 +3298,7 @@ export default function App() {
     if (existing) {
       await updateRecipe(existing.id, { ...fields, tags: [...new Set([...(existing.tags || []), ...newTags])] })
     } else {
-      const row = { id: Date.now().toString() + Math.floor(Math.random() * 100), name, ...fields, tags: newTags }
+      const row = { id: newId(), name, ...fields, tags: newTags }
       setSavedRecipes((prev) => [...prev, row])
       await dbInsert('v2_saved_recipes', row)
     }
@@ -3203,6 +3315,11 @@ export default function App() {
     try {
       if (pk.mode === 'recipe') {
         setAddModal({ dayIdx: day, slotKey, initialName: pk.name })
+      } else if (pk.mode === 'recipeDirect') {
+        // Receta ya guardada (p. ej. de la IA): va directa al menú con sus ingredientes guardados
+        await handleSaveDish({ dishName: pk.name, effort: 1, selectedIds: null, dayIdx: day, slotKey })
+        const dayName = DAYS[(startDayOfWeek + day) % 7]
+        showToast(`"${titleCase(pk.name)}" añadida al menú (${dayName}, ${SLOTS.find((x) => x.key === slotKey)?.label.toLowerCase()})`)
       } else if (pk.mode === 'pool') {
         await handleSaveDish({ dishName: pk.item.dish_name, effort: pk.item.effort || 1, selectedIds: null, dayIdx: day, slotKey })
         showToast(`"${titleCase(pk.item.dish_name)}" añadido al menú`)
@@ -3217,9 +3334,16 @@ export default function App() {
   }
 
   function handleRecipeToCart(selected, recipeName) {
-    for (const ing of selected) addCustomItemRow({ name: ing.name, category: ing.category || 'Otros', source: recipeName })
+    // No se repiten los que ya están en la lista de extras de esta semana
+    const have = new Set(customItems.map((i) => normalizeText(i.name).trim()))
+    const fresh = selected.filter((ing) => !have.has(normalizeText(ing.name).trim()))
+    addCustomItemRows(fresh.map((ing) => ({ name: ing.name, category: ing.category || 'Otros', source: recipeName })))
     setCartRecipeId(null)
-    showToast(`${selected.length} ingrediente${selected.length !== 1 ? 's' : ''} añadido${selected.length !== 1 ? 's' : ''} a la compra`)
+    const skipped = selected.length - fresh.length
+    showToast(
+      `${fresh.length} ingrediente${fresh.length !== 1 ? 's' : ''} añadido${fresh.length !== 1 ? 's' : ''} a la compra` +
+      (skipped ? ` (${skipped} ya estaba${skipped !== 1 ? 'n' : ''})` : '')
+    )
   }
 
   async function handleAutoMenuConfirm(proposals) {
@@ -3593,196 +3717,7 @@ export default function App() {
                     )
   }
 
-  return (
-    <div className="app">
-      <header className="app-header">
-        <h1><img src="/icons/logo.png" alt="" className="app-logo" /> Pizarra Semanal</h1>
-        <div className="week-nav">
-          <button onClick={() => setWeekOffset((w) => w - 1)} title="7 días atrás">
-            <ChevronLeft size={16} />
-          </button>
-          <span>{formatWeekRange(weekKey, startDayOfWeek)}</span>
-          <button onClick={() => setWeekOffset((w) => w + 1)} title="7 días adelante">
-            <ChevronRight size={16} />
-          </button>
-          {weekOffset !== 0 && (
-            <button className="btn-today" onClick={() => setWeekOffset(0)}>
-              Hoy
-            </button>
-          )}
-        </div>
-        <div className="start-day-picker">
-          <span className="start-day-label">Empieza el</span>
-          {['L', 'M', 'X', 'J', 'V', 'S', 'D'].map((abbr, i) => (
-            <button
-              key={i}
-              className={`start-day-btn${startDayOfWeek === i ? ' active' : ''}`}
-              onClick={() => { setStartDayOfWeek(i); setWeekOffset(0) }}
-              title={DAYS[i]}
-            >
-              {abbr}
-            </button>
-          ))}
-        </div>
-        <select
-          className="start-day-select"
-          value={startDayOfWeek}
-          onChange={(e) => { setStartDayOfWeek(Number(e.target.value)); setWeekOffset(0) }}
-          aria-label="Día en que empieza la semana"
-        >
-          {DAYS.map((d, i) => <option key={i} value={i}>Empieza: {d}</option>)}
-        </select>
-        <button className="logout-btn" onClick={handleLogout} title={`Cerrar sesión (${currentUser.username})`}>
-          <LogOut size={14} />
-          <span className="logout-name">{currentUser.username}</span>
-        </button>
-      </header>
-
-      <div className="app-body">
-        <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-        <div className="app-main" data-mtab={isMobile ? mobileTab : 'desktop'}>
-        <div className="board-wrapper">
-          {(copyingSlot || movingSlot) && (
-            <div className="copy-banner">
-              {movingSlot ? <ChevronRight size={14} /> : <Copy size={14} />}
-              {movingSlot
-                ? <>Moviendo <strong>{movingSlot.dish_name}</strong> — elige destino</>
-                : <>Copiando <strong>{copyingSlot.dish_name}</strong> — elige dónde pegar</>
-              }
-              <button onClick={() => { setCopyingSlot(null); setMovingSlot(null) }}><X size={13} /></button>
-            </div>
-          )}
-          {dietWarnings.length > 0 && (isMobile ? (
-            <details className="diet-warnings diet-warnings-mobile">
-              <summary>⚠️ Variedad: {dietWarnings.length} aviso{dietWarnings.length !== 1 ? 's' : ''}</summary>
-              {dietWarnings.map((w, i) => (
-                <div key={i} className="diet-warning">
-                  <strong>{w.category}</strong> varios días seguidos: {w.days.join(', ')}
-                </div>
-              ))}
-            </details>
-          ) : (
-            <div className="diet-warnings">
-              {dietWarnings.map((w, i) => (
-                <div key={i} className="diet-warning">
-                  ⚠️ <strong>{w.category}</strong> varios días seguidos: {w.days.join(', ')}
-                </div>
-              ))}
-            </div>
-          ))}
-            {isMobile && (
-              <div className="mobile-toolbar">
-                <div className="view-toggle" role="tablist">
-                  <button role="tab" aria-selected={mobileView === 'week'} className={mobileView === 'week' ? 'active' : ''} onClick={() => setMobileView('week')}>Semana</button>
-                  <button role="tab" aria-selected={mobileView === 'day'} className={mobileView === 'day' ? 'active' : ''} onClick={() => setMobileView('day')}>Día</button>
-                </div>
-                <button className="mobile-assistant-btn" onClick={() => setAssistant('menu')}>
-                  <Sparkles size={14} /> Asistente
-                </button>
-              </div>
-            )}
-            {isMobile && mobileView === 'day' ? (
-              <div
-                className="mobile-day"
-                onTouchStart={(e) => { swipe.current = { x: e.touches[0].clientX, y: e.touches[0].clientY } }}
-                onTouchEnd={(e) => {
-                  const st = swipe.current
-                  if (!st) return
-                  const dx = e.changedTouches[0].clientX - st.x
-                  const dy = e.changedTouches[0].clientY - st.y
-                  if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.6) {
-                    setMobileDay(Math.max(0, Math.min(6, selectedDay + (dx < 0 ? 1 : -1))))
-                  }
-                }}
-              >
-                <div className="day-strip">
-                  {DAYS.map((_, i) => {
-                    const date = getDayDate(weekKey, startDayOfWeek + i)
-                    const absIdx = (startDayOfWeek + i) % 7
-                    const colWk = startDayOfWeek + i >= 7 ? nextWeekKey : weekKey
-                    const count = slots.filter((x) => x.day_idx === absIdx && x.week_key === colWk).length
-                    return (
-                      <button
-                        key={i}
-                        className={`day-chip${selectedDay === i ? ' selected' : ''}${isToday(date) ? ' today' : ''}`}
-                        onClick={() => setMobileDay(i)}
-                      >
-                        <span className="day-chip-name">{DAYS[(startDayOfWeek + i) % 7].slice(0, 3)}</span>
-                        <span className="day-chip-date">{date.getDate()}</span>
-                        <span className="day-chip-dots">{count > 0 ? '●'.repeat(Math.min(count, 4)) : '\u00a0'}</span>
-                      </button>
-                    )
-                  })}
-                </div>
-                <div className="mobile-day-title">
-                  <span>
-                    {DAYS[(startDayOfWeek + selectedDay) % 7]}{' '}
-                    {getDayDate(weekKey, startDayOfWeek + selectedDay).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}
-                  </span>
-                </div>
-                {SLOTS.map((slot) => (
-                  <section key={slot.key} className="mobile-slot">
-                    <h4 className="mobile-slot-title">{slot.label}</h4>
-                    {renderCell(selectedDay, slot)}
-                  </section>
-                ))}
-              </div>
-            ) : (
-            <div className={isMobile ? 'week-scroll' : undefined} ref={weekScrollRef}>
-            <div className={`board${isMobile ? ' board-mobile' : ''}`}>
-              <div className="board-header-empty" />
-              {DAYS.map((_, i) => {
-                const date = getDayDate(weekKey, startDayOfWeek + i)
-                const name = DAYS[(startDayOfWeek + i) % 7]
-                return (
-                  <div
-                    key={i}
-                    className={`board-day-header${isToday(date) ? ' today' : ''}`}
-                  >
-                    <div className="day-name">{name}</div>
-                    <div className="day-date">
-                      {date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
-                    </div>
-                  </div>
-                )
-              })}
-
-              {SLOTS.map((slot) => (
-                <React.Fragment key={slot.key}>
-                  <div className="board-slot-label">{slot.label}</div>
-                  {DAYS.map((_, i) => renderCell(i, slot))}
-                </React.Fragment>
-              ))}
-            </div>
-            </div>
-            )}
-        </div>{/* /board-wrapper */}
-        <DragOverlay dropAnimation={null}>
-              {activeId && (() => {
-                if (String(activeId).startsWith('pool-')) {
-                  const p = poolItems.find((x) => x.id === String(activeId).replace('pool-', ''))
-                  return p ? <div className="tray-dish-overlay">{p.dish_name || '…'}</div> : null
-                }
-                if (String(activeId).startsWith('recipe-')) {
-                  const r = savedRecipes.find((x) => `recipe-${x.id}` === activeId)
-                  if (!r) return null
-                  const cat = getDominantCategory([], ingredients, r.name)
-                  const bg = cat ? (CATEGORY_PASTELS[cat] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
-                  return <div className="postit-overlay" style={{ background: bg }}><span className="postit-name">{titleCase(r.name)}</span></div>
-                }
-                if (String(activeId).startsWith('shopping-custom-')) {
-                  const customId = String(activeId).replace('shopping-custom-', '')
-                  const item = customItems.find((i) => i.id === customId)
-                  return item ? <div className="shopping-item-overlay">{titleCase(item.name)}</div> : null
-                }
-                const s = slots.find((x) => x.id === activeId)
-                if (!s) return null
-                const cat = effectiveOverrides[s.id] || getDominantCategory(s.ingredient_ids, ingredients, s.dish_name)
-                const bg = cat ? (CATEGORY_PASTELS[cat] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
-                return <div className="postit-overlay" style={{ background: bg }}><span className="postit-name">{titleCase(s.dish_name)}</span></div>
-              })()}
-            </DragOverlay>
-
+  const trayNode = (
         <div className="dishes-tray">
           <div className="tray-tabs">
             <button className={`tray-tab${trayTab === 'pool' ? ' active' : ''}`} onClick={() => setTrayTab('pool')}>
@@ -3791,26 +3726,28 @@ export default function App() {
             <button className={`tray-tab${trayTab === 'recipes' ? ' active' : ''}`} onClick={() => setTrayTab('recipes')}>
               Recetas{savedRecipes.length > 0 && <span className="tray-tab-count">{savedRecipes.length}</span>}
             </button>
-            {trayTab === 'pool' && (
-              <>
-                <button className="btn-add-slot tray-add-btn" onClick={() => addPoolItem()}>
-                  <Plus size={11} /> Plato
-                </button>
-                <button className="btn-add-slot tray-add-btn" onClick={() => setPantryModal({ mode: 'ingredient' })}>
-                  <Plus size={11} /> Ingrediente
-                </button>
-              </>
-            )}
-            {trayTab === 'recipes' && (
-              <>
-                <button className="btn-add-slot tray-add-btn" onClick={() => addRecipe('')}>
-                  <Plus size={11} /> Receta
-                </button>
-                <button className="btn-add-slot tray-add-btn tray-ai-btn" onClick={() => setAssistant('menu')} title="Sugerir el menú de la semana o buscar ideas de recetas con IA">
-                  <Sparkles size={11} /> Asistente
-                </button>
-              </>
-            )}
+            <div className="tray-actions">
+              {trayTab === 'pool' && (
+                <>
+                  <button className="btn-add-slot tray-add-btn" onClick={() => addPoolItem()}>
+                    <Plus size={11} /> Plato
+                  </button>
+                  <button className="btn-add-slot tray-add-btn" onClick={() => setPantryModal({ mode: 'ingredient' })}>
+                    <Plus size={11} /> Ingrediente
+                  </button>
+                </>
+              )}
+              {trayTab === 'recipes' && (
+                <>
+                  <button className="btn-add-slot tray-add-btn" onClick={() => addRecipe('')}>
+                    <Plus size={11} /> Receta
+                  </button>
+                  <button className="btn-add-slot tray-add-btn tray-ai-btn" onClick={() => setAssistant('menu')} title="Sugerir el menú de la semana o buscar ideas de recetas con IA">
+                    <Sparkles size={11} /> Asistente
+                  </button>
+                </>
+              )}
+            </div>
           </div>
 
           {trayTab === 'pool' && (
@@ -3956,8 +3893,10 @@ export default function App() {
             </DroppableTrayZone>
           )}
         </div>
-        </div>{/* /app-main */}
+  )
 
+  const sidebarNode = (
+    <>
         {shoppingOpen && (
           <div className="sidebar-overlay" onClick={() => setShoppingOpen(false)} />
         )}
@@ -4083,6 +4022,250 @@ export default function App() {
             </div>
           </div>
         </aside>
+    </>
+  )
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <h1><img src="/icons/logo.png" alt="" className="app-logo" /> Pizarra Semanal</h1>
+        <div className="week-nav">
+          <button onClick={() => setWeekOffset((w) => w - 1)} title="7 días atrás">
+            <ChevronLeft size={16} />
+          </button>
+          <span>{formatWeekRange(weekKey, startDayOfWeek)}</span>
+          <button onClick={() => setWeekOffset((w) => w + 1)} title="7 días adelante">
+            <ChevronRight size={16} />
+          </button>
+          {weekOffset !== 0 && (
+            <button className="btn-today" onClick={() => setWeekOffset(0)}>
+              Hoy
+            </button>
+          )}
+        </div>
+        <select
+          className="start-day-select"
+          value={startDayOfWeek}
+          onChange={(e) => { setStartDayOfWeek(Number(e.target.value)); setWeekOffset(0) }}
+          aria-label="Día en que empieza la semana"
+        >
+          {DAYS.map((d, i) => <option key={i} value={i}>Empieza: {d}</option>)}
+        </select>
+        <div className="header-actions">
+          <button className="header-assistant" onClick={() => setAssistant('menu')} title="Sugerir el menú de la semana o buscar ideas de recetas con IA">
+            <Sparkles size={16} /> Asistente
+          </button>
+          <div className="settings-wrap">
+            <button className="icon-btn" onClick={() => setSettingsOpen((v) => !v)} aria-label="Ajustes" aria-expanded={settingsOpen} title="Ajustes">
+              <Settings size={18} />
+            </button>
+            {settingsOpen && (
+              <div className="settings-pop" role="dialog" aria-label="Ajustes">
+                <div className="settings-title">La semana empieza el</div>
+                <div className="settings-days">
+                  {['L', 'M', 'X', 'J', 'V', 'S', 'D'].map((abbr, i) => (
+                    <button
+                      key={i}
+                      className={`start-day-btn${startDayOfWeek === i ? ' active' : ''}`}
+                      onClick={() => { setStartDayOfWeek(i); setWeekOffset(0) }}
+                      title={DAYS[i]}
+                    >
+                      {abbr}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <button className="logout-btn" onClick={handleLogout} title={`Cerrar sesión (${currentUser.username})`}>
+          <LogOut size={14} />
+          <span className="logout-name">{currentUser.username}</span>
+        </button>
+        </div>
+      </header>
+
+      <div className="app-body">
+        <DndContext sensors={sensors} collisionDetection={collisionByPointer} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <div className="app-main" data-mtab={isMobile ? mobileTab : 'desktop'}>
+        <div className="board-wrapper">
+          {(copyingSlot || movingSlot) && (
+            <div className="copy-banner">
+              {movingSlot ? <ChevronRight size={14} /> : <Copy size={14} />}
+              {movingSlot
+                ? <>Moviendo <strong>{movingSlot.dish_name}</strong> — elige destino</>
+                : <>Copiando <strong>{copyingSlot.dish_name}</strong> — elige dónde pegar</>
+              }
+              <button onClick={() => { setCopyingSlot(null); setMovingSlot(null) }}><X size={13} /></button>
+            </div>
+          )}
+          {dietWarnings.length > 0 && (isMobile ? (
+            <details className="diet-warnings diet-warnings-mobile">
+              <summary>⚠️ Variedad: {dietWarnings.length} aviso{dietWarnings.length !== 1 ? 's' : ''}</summary>
+              {dietWarnings.map((w, i) => (
+                <div key={i} className="diet-warning">
+                  <strong>{w.category}</strong> varios días seguidos: {w.days.join(', ')}
+                </div>
+              ))}
+            </details>
+          ) : (
+            <div className="diet-warnings">
+              {dietWarnings.map((w, i) => (
+                <div key={i} className="diet-warning">
+                  ⚠️ <strong>{w.category}</strong> varios días seguidos: {w.days.join(', ')}
+                </div>
+              ))}
+            </div>
+          ))}
+            {isMobile && (
+              <div className="mobile-toolbar">
+                <div className="view-toggle" role="tablist">
+                  <button role="tab" aria-selected={mobileView === 'week'} className={mobileView === 'week' ? 'active' : ''} onClick={() => setMobileView('week')}>Semana</button>
+                  <button role="tab" aria-selected={mobileView === 'day'} className={mobileView === 'day' ? 'active' : ''} onClick={() => setMobileView('day')}>Día</button>
+                </div>
+                <button className="mobile-assistant-btn" onClick={() => setAssistant('menu')}>
+                  <Sparkles size={14} /> Asistente
+                </button>
+              </div>
+            )}
+            {isMobile && mobileView === 'day' ? (
+              <div
+                className="mobile-day"
+                onTouchStart={(e) => { swipe.current = { x: e.touches[0].clientX, y: e.touches[0].clientY } }}
+                onTouchEnd={(e) => {
+                  const st = swipe.current
+                  if (!st) return
+                  const dx = e.changedTouches[0].clientX - st.x
+                  const dy = e.changedTouches[0].clientY - st.y
+                  if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.6) {
+                    setMobileDay(Math.max(0, Math.min(6, selectedDay + (dx < 0 ? 1 : -1))))
+                  }
+                }}
+              >
+                <div className="day-strip">
+                  {DAYS.map((_, i) => {
+                    const date = getDayDate(weekKey, startDayOfWeek + i)
+                    const absIdx = (startDayOfWeek + i) % 7
+                    const colWk = startDayOfWeek + i >= 7 ? nextWeekKey : weekKey
+                    const count = slots.filter((x) => x.day_idx === absIdx && x.week_key === colWk).length
+                    return (
+                      <button
+                        key={i}
+                        className={`day-chip${selectedDay === i ? ' selected' : ''}${isToday(date) ? ' today' : ''}`}
+                        onClick={() => setMobileDay(i)}
+                      >
+                        <span className="day-chip-name">{DAYS[(startDayOfWeek + i) % 7].slice(0, 3)}</span>
+                        <span className="day-chip-date">{date.getDate()}</span>
+                        <span className="day-chip-dots">{count > 0 ? '●'.repeat(Math.min(count, 4)) : '\u00a0'}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+                <div className="mobile-day-title">
+                  <span>
+                    {DAYS[(startDayOfWeek + selectedDay) % 7]}{' '}
+                    {getDayDate(weekKey, startDayOfWeek + selectedDay).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}
+                  </span>
+                </div>
+                {SLOTS.map((slot) => (
+                  <section key={slot.key} className="mobile-slot">
+                    <h4 className="mobile-slot-title">{slot.label}</h4>
+                    {renderCell(selectedDay, slot)}
+                  </section>
+                ))}
+              </div>
+            ) : (
+            <div className={isMobile ? 'week-scroll' : undefined} ref={weekScrollRef}>
+            <div className={`board${isMobile ? ' board-mobile' : ''}`}>
+              <div className="board-header-empty" />
+              {DAYS.map((_, i) => {
+                const date = getDayDate(weekKey, startDayOfWeek + i)
+                const name = DAYS[(startDayOfWeek + i) % 7]
+                return (
+                  <div
+                    key={i}
+                    className={`board-day-header${isToday(date) ? ' today' : ''}`}
+                  >
+                    <div className="day-name">{name}</div>
+                    <div className="day-date">
+                      {date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
+                    </div>
+                  </div>
+                )
+              })}
+
+              {SLOTS.map((slot) => (
+                <React.Fragment key={slot.key}>
+                  <div className="board-slot-label">{slot.label}</div>
+                  {DAYS.map((_, i) => renderCell(i, slot))}
+                </React.Fragment>
+              ))}
+            </div>
+            </div>
+            )}
+        </div>{/* /board-wrapper */}
+        <DragOverlay dropAnimation={null}>
+              {activeId && (() => {
+                if (String(activeId).startsWith('pool-')) {
+                  const p = poolItems.find((x) => x.id === String(activeId).replace('pool-', ''))
+                  return p ? <div className="tray-dish-overlay">{p.dish_name || '…'}</div> : null
+                }
+                if (String(activeId).startsWith('recipe-')) {
+                  const r = savedRecipes.find((x) => `recipe-${x.id}` === activeId)
+                  if (!r) return null
+                  const cat = getDominantCategory([], ingredients, r.name)
+                  const bg = cat ? (CATEGORY_PASTELS[cat] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
+                  return <div className="postit-overlay" style={{ background: bg }}><span className="postit-name">{titleCase(r.name)}</span></div>
+                }
+                if (String(activeId).startsWith('shopping-custom-')) {
+                  const customId = String(activeId).replace('shopping-custom-', '')
+                  const item = customItems.find((i) => i.id === customId)
+                  return item ? <div className="shopping-item-overlay">{titleCase(item.name)}</div> : null
+                }
+                const s = slots.find((x) => x.id === activeId)
+                if (!s) return null
+                const cat = effectiveOverrides[s.id] || getDominantCategory(s.ingredient_ids, ingredients, s.dish_name)
+                const bg = cat ? (CATEGORY_PASTELS[cat] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']
+                return <div className="postit-overlay" style={{ background: bg }}><span className="postit-name">{titleCase(s.dish_name)}</span></div>
+              })()}
+            </DragOverlay>
+
+        {isMobile && trayNode}
+        </div>{/* /app-main */}
+
+        {isMobile ? sidebarNode : (
+          <aside className={`side-panel${panelOpen ? '' : ' collapsed'}`}>
+            {panelOpen ? (
+              <>
+                <div className="side-tabs">
+                  <div className="side-tablist" role="tablist">
+                    <button role="tab" aria-selected={panelTab === 'shop'} className={`side-tab${panelTab === 'shop' ? ' active' : ''}`} onClick={() => choosePanelTab('shop')}>
+                      Compra {totalItems > 0 && <span className="side-badge">{totalItems}</span>}
+                    </button>
+                    <button role="tab" aria-selected={panelTab === 'pool'} className={`side-tab${panelTab === 'pool' ? ' active' : ''}`} onClick={() => choosePanelTab('pool')}>
+                      Despensa
+                    </button>
+                    <button role="tab" aria-selected={panelTab === 'recipes'} className={`side-tab${panelTab === 'recipes' ? ' active' : ''}`} onClick={() => choosePanelTab('recipes')}>
+                      Recetas {savedRecipes.length > 0 && <span className="side-badge">{savedRecipes.length}</span>}
+                    </button>
+                  </div>
+                  <button className="side-collapse" onClick={() => setPanelOpenPersist(false)} title="Plegar el panel" aria-label="Plegar el panel">
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+                <div className="side-body">{panelTab === 'shop' ? sidebarNode : trayNode}</div>
+              </>
+            ) : (
+              <div className="side-rail">
+                <button className="side-rail-btn" onClick={() => setPanelOpenPersist(true)} title="Abrir el panel" aria-label="Abrir el panel"><ChevronLeft size={18} /></button>
+                <button className="side-rail-btn" onClick={() => choosePanelTab('shop')} title="Lista de la compra" aria-label="Lista de la compra">
+                  <span className="mobile-nav-icon"><ShoppingCart size={19} />{totalItems > 0 && <span className="fab-badge">{totalItems}</span>}</span>
+                </button>
+                <button className="side-rail-btn" onClick={() => choosePanelTab('pool')} title="Despensa" aria-label="Despensa"><Package size={19} /></button>
+                <button className="side-rail-btn" onClick={() => choosePanelTab('recipes')} title="Recetas" aria-label="Recetas"><BookOpen size={19} /></button>
+              </div>
+            )}
+          </aside>
+        )}
         </DndContext>
       </div>{/* /app-body */}
 
@@ -4181,12 +4364,14 @@ export default function App() {
           availableIds={pantryIngredients.map((p) => p.ingredient_id).filter(Boolean)}
           onClose={() => setAssistant(null)}
           onAdd={handleAddProposal}
+          onPlan={(name) => setPlanPicker({ mode: 'recipeDirect', name })}
+          onGoMenu={() => setAssistant('menu')}
         />
       )}
 
       {planPicker && (
         <PlanPicker
-          title={planPicker.mode === 'move' ? 'Mover a…' : planPicker.mode === 'copy' ? 'Copiar a…' : 'Añadir al menú'}
+          title={planPicker.mode === 'move' ? 'Mover a…' : planPicker.mode === 'copy' ? 'Copiar a…' : planPicker.mode === 'recipeDirect' ? `Añadir "${titleCase(planPicker.name)}" al menú` : 'Añadir al menú'}
           startDayOfWeek={startDayOfWeek}
           weekKey={weekKey}
           initialDay={selectedDay}
