@@ -1284,61 +1284,202 @@ function RecipeCartModal({ recipe, ingredientIds, ingredients, onClose, onConfir
 
 // ─── AutoMenuModal ─────────────────────────────────────────────────────────────
 
-function AutoMenuModal({ slots, poolItems, savedRecipes, ingredients, weekKey, nextWeekKey, startDayOfWeek, onClose, onConfirm }) {
-  function shuffleArr(arr) {
-    const a = [...arr]
-    for (let i = a.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [a[i], a[j]] = [a[j], a[i]]
+const AUTO_MENU_DEFAULTS = {
+  slots: { lunch: true, dinner: true },
+  days: [true, true, true, true, true, true, true],
+  fromPool: true,
+  fromRecipes: true,
+  tag: '',
+  minRating: 0,
+  preferRated: true,
+  preferNovel: true,
+  avoidSameType: true,
+  balanceTypes: true,
+  noRepeat: true,
+}
+
+function loadAutoMenuOptions() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('autoMenuOptions') || 'null')
+    return saved ? { ...AUTO_MENU_DEFAULTS, ...saved, slots: { ...AUTO_MENU_DEFAULTS.slots, ...saved.slots } } : AUTO_MENU_DEFAULTS
+  } catch {
+    return AUTO_MENU_DEFAULTS
+  }
+}
+
+function AutoMenuModal({
+  slots, allSlots, poolItems, savedRecipes, ingredients, dishIngMap, allTags,
+  weekKey, nextWeekKey, startDayOfWeek, onClose, onConfirm, onOpenRecipe,
+}) {
+  const [opts, setOptsRaw] = useState(loadAutoMenuOptions)
+  const [showOpts, setShowOpts] = useState(false)
+  const [sheetKey, setSheetKey] = useState(null)
+  const [swapQuery, setSwapQuery] = useState('')
+  const [swapping, setSwapping] = useState(false)
+  const setOpts = (patch) => setOptsRaw((o) => {
+    const next = { ...o, ...patch }
+    try { localStorage.setItem('autoMenuOptions', JSON.stringify(next)) } catch {}
+    return next
+  })
+
+  const recipeByName = useMemo(() => {
+    const m = new Map()
+    for (const r of savedRecipes) if (r.name) m.set(r.name.trim().toLowerCase(), r)
+    return m
+  }, [savedRecipes])
+
+  // Última vez que se usó cada plato (para priorizar los que hace más que no se repiten)
+  const lastUsed = useMemo(() => {
+    const m = {}
+    for (const s of allSlots) {
+      if (!s.dish_name || s.dish_name === '?') continue
+      const t = getDayDate(s.week_key, s.day_idx).getTime()
+      const k = s.dish_name.trim().toLowerCase()
+      if (!m[k] || t > m[k]) m[k] = t
     }
-    return a
+    return m
+  }, [allSlots])
+
+  const typeOf = (name) => {
+    const r = recipeByName.get(name.trim().toLowerCase())
+    return r?.type || getDominantCategory(savedIngredientIds(dishIngMap, name), ingredients, name)
   }
 
-  function generate() {
-    const candidates = [...new Set([
-      ...poolItems.filter((p) => p.dish_name).map((p) => p.dish_name),
-      ...savedRecipes.filter((r) => r.name).map((r) => r.name),
-    ])]
-    if (!candidates.length) return []
+  const candidates = useMemo(() => {
+    const m = new Map()
+    const add = (name) => {
+      const k = (name || '').trim().toLowerCase()
+      if (k && !m.has(k)) m.set(k, name.trim())
+    }
+    if (opts.fromPool) poolItems.forEach((p) => add(p.dish_name))
+    if (opts.fromRecipes) savedRecipes.forEach((r) => add(r.name))
+    return [...m.entries()]
+      .filter(([k]) => {
+        const r = recipeByName.get(k)
+        if (opts.tag && !(r?.tags || []).includes(opts.tag)) return false
+        if (opts.minRating && (r?.rating || 0) < opts.minRating) return false
+        return true
+      })
+      .map(([, name]) => name)
+  }, [opts.fromPool, opts.fromRecipes, opts.tag, opts.minRating, poolItems, savedRecipes, recipeByName])
 
-    const proposals = []
+  const cellKey = (i, slotKey) => `${i}-${slotKey}`
 
-    for (const slot of SLOTS) {
-      const shuffled = shuffleArr(candidates)
-      let si = 0
+  // Genera propuestas: lo que ya está en el tablero y lo que el usuario ha elegido (✓) se mantiene;
+  // solo se vuelven a sortear las celdas no elegidas.
+  function generate(prev = {}) {
+    const result = {}
+    const used = new Set()
+    const typeCount = {}
+    const countType = (name) => {
+      const t = typeOf(name)
+      if (t && !ALERT_EXCLUDED.has(t)) typeCount[t] = (typeCount[t] || 0) + 1
+    }
 
-      for (let i = 0; i < 7; i++) {
+    // 1) fijar lo existente y lo elegido
+    for (let i = 0; i < 7; i++) {
+      for (const slot of SLOTS) {
         const absIdx = (startDayOfWeek + i) % 7
         const colWk = startDayOfWeek + i >= 7 ? nextWeekKey : weekKey
-        const existing = slots.find(
-          (s) => s.day_idx === absIdx && s.slot_key === slot.key && s.week_key === colWk
-        )
+        const existing = slots.find((s) => s.day_idx === absIdx && s.slot_key === slot.key && s.week_key === colWk)
+        const k = cellKey(i, slot.key)
         if (existing) {
-          proposals.push({ displayDay: i, slotKey: slot.key, dishName: existing.dish_name, isExisting: true })
-          continue
-        }
-
-        const prevEntry = proposals.find((p) => p.displayDay === i - 1 && p.slotKey === slot.key)
-        const prevCat = prevEntry ? getDominantCategory([], ingredients, prevEntry.dishName) : null
-
-        let chosen = null
-        for (let attempt = 0; attempt < shuffled.length; attempt++) {
-          const candidate = shuffled[(si + attempt) % shuffled.length]
-          const cat = getDominantCategory([], ingredients, candidate)
-          if (!prevCat || !cat || cat !== prevCat) {
-            chosen = candidate
-            si = (si + attempt + 1) % shuffled.length
-            break
-          }
-        }
-        if (!chosen) { chosen = shuffled[si % shuffled.length]; si = (si + 1) % shuffled.length }
-        proposals.push({ displayDay: i, slotKey: slot.key, dishName: chosen, isExisting: false })
+          result[k] = { dishName: existing.dish_name, isExisting: true, selected: false }
+        } else if (prev[k]?.selected) {
+          result[k] = { ...prev[k] }
+        } else continue
+        used.add(result[k].dishName.trim().toLowerCase())
+        countType(result[k].dishName)
       }
     }
-    return proposals
+
+    // 2) rellenar el resto
+    const now = Date.now()
+    for (let i = 0; i < 7; i++) {
+      if (!opts.days[i]) continue
+      for (const slot of SLOTS) {
+        const k = cellKey(i, slot.key)
+        if (result[k] || !opts.slots[slot.key]) continue
+        const neighbours = [
+          result[cellKey(i - 1, slot.key)],
+          result[cellKey(i, SLOTS.find((s) => s.key !== slot.key).key)],
+        ].filter(Boolean).map((c) => typeOf(c.dishName))
+
+        let best = null
+        let bestScore = -Infinity
+        for (const name of candidates) {
+          const key = name.toLowerCase()
+          if (opts.noRepeat && used.has(key)) continue
+          const t = typeOf(name)
+          const countable = t && !ALERT_EXCLUDED.has(t)
+          let score = Math.random()
+          if (opts.preferRated) {
+            const rating = recipeByName.get(key)?.rating
+            if (rating) score += (rating - 3) * 0.4
+          }
+          if (opts.preferNovel) {
+            const days = lastUsed[key] ? (now - lastUsed[key]) / 86400000 : 60
+            score += Math.min(days, 60) / 60 * 1.5
+          }
+          if (opts.avoidSameType && countable && neighbours.includes(t)) score -= 3
+          if (opts.balanceTypes && countable) score -= 0.8 * (typeCount[t] || 0)
+          if (score > bestScore) { bestScore = score; best = name }
+        }
+        if (best) {
+          result[k] = { dishName: best, isExisting: false, selected: false }
+          used.add(best.toLowerCase())
+          countType(best)
+        }
+      }
+    }
+    return result
   }
 
   const [proposals, setProposals] = useState(() => generate())
+
+  // Al cambiar los ajustes se vuelven a sortear las propuestas no elegidas
+  const firstRun = useRef(true)
+  useEffect(() => {
+    if (firstRun.current) { firstRun.current = false; return }
+    setProposals((p) => generate(p))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opts])
+
+  const entries = Object.entries(proposals)
+  const proposed = entries.filter(([, p]) => !p.isExisting)
+  const selectedCount = proposed.filter(([, p]) => p.selected).length
+
+  const toggleSelected = (k) => setProposals((p) => ({ ...p, [k]: { ...p[k], selected: !p[k].selected } }))
+  const setAllSelected = (value) => setProposals((p) => Object.fromEntries(
+    Object.entries(p).map(([k, v]) => [k, v.isExisting ? v : { ...v, selected: value }])
+  ))
+  const removeCell = (k) => { setProposals((p) => { const n = { ...p }; delete n[k]; return n }); setSheetKey(null) }
+  const rerollCell = (k) => {
+    setProposals((p) => {
+      const rest = { ...p }
+      delete rest[k]
+      const fresh = generate(rest)
+      return fresh[k] ? { ...p, [k]: fresh[k] } : p
+    })
+  }
+  const swapCell = (k, name) => {
+    setProposals((p) => ({ ...p, [k]: { dishName: name, isExisting: false, selected: true } }))
+    setSwapping(false)
+    setSwapQuery('')
+  }
+
+  const swapOptions = useMemo(() => {
+    const q = normalizeText(swapQuery).trim()
+    const all = [...new Set([...poolItems.map((p) => p.dish_name), ...savedRecipes.map((r) => r.name)].filter(Boolean).map((n) => n.trim()))]
+    return all.filter((n) => !q || normalizeText(n).includes(q)).sort((a, b) => a.localeCompare(b, 'es')).slice(0, 30)
+  }, [swapQuery, poolItems, savedRecipes])
+
+  const sheet = sheetKey ? proposals[sheetKey] : null
+  const sheetRecipe = sheet ? recipeByName.get(sheet.dishName.trim().toLowerCase()) : null
+  const sheetIngredients = sheet
+    ? savedIngredientIds(dishIngMap, sheet.dishName).map((id) => ingredients.find((i) => i.id === id)).filter(Boolean)
+    : []
+  const sheetType = sheet ? typeOf(sheet.dishName) : null
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -1348,6 +1489,67 @@ function AutoMenuModal({ slots, poolItems, savedRecipes, ingredients, weekKey, n
           <button className="modal-close" onClick={onClose}><X size={16} /></button>
         </div>
         <div className="modal-body">
+          <div className="auto-menu-toolbar">
+            <button className={`auto-menu-opts-btn${showOpts ? ' active' : ''}`} onClick={() => setShowOpts((v) => !v)}>
+              ⚙️ Ajustes {showOpts ? '▴' : '▾'}
+            </button>
+            <span className="auto-menu-count">{candidates.length} platos disponibles</span>
+            <span style={{ flex: 1 }} />
+            <button className="auto-menu-link" onClick={() => setAllSelected(true)}>Elegir todo</button>
+            <button className="auto-menu-link" onClick={() => setAllSelected(false)}>Ninguno</button>
+          </div>
+
+          {showOpts && (
+            <div className="auto-menu-opts">
+              <div className="auto-opt-group">
+                <span className="auto-opt-title">Rellenar</span>
+                {SLOTS.map((s) => (
+                  <label key={s.key} className="auto-opt-check">
+                    <input type="checkbox" checked={opts.slots[s.key]} onChange={(e) => setOpts({ slots: { ...opts.slots, [s.key]: e.target.checked } })} />
+                    {s.label}
+                  </label>
+                ))}
+              </div>
+              <div className="auto-opt-group">
+                <span className="auto-opt-title">Días</span>
+                {Array.from({ length: 7 }, (_, i) => (
+                  <button
+                    key={i}
+                    className={`auto-day-chip${opts.days[i] ? ' on' : ''}`}
+                    onClick={() => setOpts({ days: opts.days.map((d, j) => (j === i ? !d : d)) })}
+                  >
+                    {DAYS[(startDayOfWeek + i) % 7].slice(0, 3)}
+                  </button>
+                ))}
+              </div>
+              <div className="auto-opt-group">
+                <span className="auto-opt-title">Elegir entre</span>
+                <label className="auto-opt-check"><input type="checkbox" checked={opts.fromPool} onChange={(e) => setOpts({ fromPool: e.target.checked })} />Mi despensa</label>
+                <label className="auto-opt-check"><input type="checkbox" checked={opts.fromRecipes} onChange={(e) => setOpts({ fromRecipes: e.target.checked })} />Recetas</label>
+                {allTags.length > 0 && (
+                  <select className="auto-opt-select" value={opts.tag} onChange={(e) => setOpts({ tag: e.target.value })}>
+                    <option value="">Cualquier etiqueta</option>
+                    {allTags.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                )}
+                <select className="auto-opt-select" value={opts.minRating} onChange={(e) => setOpts({ minRating: Number(e.target.value) })}>
+                  <option value={0}>Cualquier valoración</option>
+                  <option value={3}>★ 3 o más</option>
+                  <option value={4}>★ 4 o más</option>
+                  <option value={5}>★ 5</option>
+                </select>
+              </div>
+              <div className="auto-opt-group">
+                <span className="auto-opt-title">Criterios</span>
+                <label className="auto-opt-check"><input type="checkbox" checked={opts.noRepeat} onChange={(e) => setOpts({ noRepeat: e.target.checked })} />No repetir platos en la semana</label>
+                <label className="auto-opt-check"><input type="checkbox" checked={opts.avoidSameType} onChange={(e) => setOpts({ avoidSameType: e.target.checked })} />Evitar el mismo tipo seguido</label>
+                <label className="auto-opt-check"><input type="checkbox" checked={opts.balanceTypes} onChange={(e) => setOpts({ balanceTypes: e.target.checked })} />Equilibrar tipos de plato</label>
+                <label className="auto-opt-check"><input type="checkbox" checked={opts.preferRated} onChange={(e) => setOpts({ preferRated: e.target.checked })} />Priorizar las mejor valoradas</label>
+                <label className="auto-opt-check"><input type="checkbox" checked={opts.preferNovel} onChange={(e) => setOpts({ preferNovel: e.target.checked })} />Priorizar las que hace más que no comes</label>
+              </div>
+            </div>
+          )}
+
           <div className="auto-menu-grid">
             <div className="auto-menu-corner" />
             {Array.from({ length: 7 }, (_, i) => (
@@ -1359,33 +1561,131 @@ function AutoMenuModal({ slots, poolItems, savedRecipes, ingredients, weekKey, n
               <React.Fragment key={slot.key}>
                 <div className="auto-menu-row-label">{slot.label}</div>
                 {Array.from({ length: 7 }, (_, i) => {
-                  const entry = proposals.find((p) => p.displayDay === i && p.slotKey === slot.key)
-                  const cat = entry ? getDominantCategory([], ingredients, entry.dishName) : null
-                  const bg = entry && !entry.isExisting ? (cat ? (CATEGORY_PASTELS[cat] ?? CATEGORY_PASTELS['Otros']) : CATEGORY_PASTELS['Otros']) : undefined
+                  const k = cellKey(i, slot.key)
+                  const entry = proposals[k]
+                  if (!entry) return <div key={k} className="auto-menu-cell empty">—</div>
+                  const cat = entry.isExisting ? null : typeOf(entry.dishName)
+                  const bg = !entry.isExisting ? (CATEGORY_PASTELS[cat] ?? CATEGORY_PASTELS['Otros']) : undefined
                   return (
-                    <div key={i} className={`auto-menu-cell${entry?.isExisting ? ' existing' : ' proposed'}`} style={bg ? { background: bg } : {}}>
-                      {entry ? titleCase(entry.dishName) : '—'}
+                    <div
+                      key={k}
+                      className={`auto-menu-cell${entry.isExisting ? ' existing' : ' proposed'}${entry.selected ? ' chosen' : ''}${sheetKey === k ? ' open' : ''}`}
+                      style={bg ? { background: bg } : {}}
+                      onClick={() => { setSheetKey(sheetKey === k ? null : k); setSwapping(false) }}
+                      title="Ver la receta"
+                    >
+                      {!entry.isExisting && (
+                        <input
+                          type="checkbox"
+                          className="auto-cell-check"
+                          checked={entry.selected}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={() => toggleSelected(k)}
+                          title="Elegir: se guarda en el menú y no se vuelve a sortear"
+                        />
+                      )}
+                      <span>{titleCase(entry.dishName)}</span>
                     </div>
                   )
                 })}
               </React.Fragment>
             ))}
           </div>
-          {proposals.length === 0 && (
-            <p className="auto-menu-empty">Añade platos a tu despensa o recetas para poder generar un menú.</p>
+
+          {entries.length === 0 && (
+            <p className="auto-menu-empty">No hay platos con estos ajustes. Añade platos a la despensa o a las recetas, o relaja los filtros.</p>
+          )}
+          <p className="auto-menu-note">
+            Marca ☑ los platos que quieras: solo esos se guardan en el menú y no cambian al re-generar.
+            Pulsa un plato para ver su receta.
+          </p>
+
+          {sheet && (
+            <div className="auto-sheet">
+              <div className="auto-sheet-head">
+                <strong>{titleCase(sheet.dishName)}</strong>
+                {sheetType && (
+                  <span className="auto-sheet-type" style={{ background: CATEGORY_PASTELS[sheetType] }}>
+                    {FOOD_TYPES.find((f) => f.key === sheetType)?.label || sheetType}
+                  </span>
+                )}
+                {sheet.isExisting && <span className="auto-sheet-type">ya en el menú</span>}
+                {sheetRecipe?.rating ? <span className="auto-sheet-stars">{'★'.repeat(sheetRecipe.rating)}</span> : null}
+                <button className="auto-menu-link" style={{ marginLeft: 'auto' }} onClick={() => setSheetKey(null)}>Cerrar</button>
+              </div>
+
+              {sheetIngredients.length > 0 ? (
+                <div className="auto-sheet-section">
+                  <span className="auto-sheet-label">Ingredientes</span>
+                  <div className="auto-sheet-chips">
+                    {sheetIngredients.map((ing) => <span key={ing.id} className="auto-sheet-chip">{titleCase(ing.name)}</span>)}
+                  </div>
+                </div>
+              ) : (
+                <p className="auto-sheet-muted">Sin ingredientes guardados todavía.</p>
+              )}
+              {sheetRecipe?.steps && (
+                <div className="auto-sheet-section">
+                  <span className="auto-sheet-label">Pasos</span>
+                  <p className="auto-sheet-text">{sheetRecipe.steps}</p>
+                </div>
+              )}
+              {sheetRecipe?.description && (
+                <div className="auto-sheet-section">
+                  <span className="auto-sheet-label">Notas</span>
+                  <p className="auto-sheet-text">{sheetRecipe.description}</p>
+                </div>
+              )}
+
+              <div className="auto-sheet-actions">
+                <button className="btn btn-ghost" onClick={() => onOpenRecipe(sheet.dishName)}>
+                  <Pencil size={13} /> {sheetRecipe ? 'Editar receta' : 'Crear receta'}
+                </button>
+                {!sheet.isExisting && (
+                  <>
+                    <button className="btn btn-ghost" onClick={() => setSwapping((v) => !v)}>Cambiar por…</button>
+                    <button className="btn btn-ghost" onClick={() => rerollCell(sheetKey)}><RotateCcw size={13} /> Otro al azar</button>
+                    <button className="btn btn-ghost" onClick={() => removeCell(sheetKey)}>Quitar</button>
+                  </>
+                )}
+              </div>
+
+              {swapping && !sheet.isExisting && (
+                <div className="auto-swap">
+                  <input
+                    className="form-input"
+                    placeholder="Buscar plato o receta…"
+                    value={swapQuery}
+                    onChange={(e) => setSwapQuery(e.target.value)}
+                    autoFocus
+                  />
+                  <div className="auto-swap-list">
+                    {swapOptions.map((n) => (
+                      <button key={n} className="autocomplete-item" onClick={() => swapCell(sheetKey, n)}>{titleCase(n)}</button>
+                    ))}
+                    {swapOptions.length === 0 && <span className="auto-sheet-muted">Sin resultados</span>}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </div>
         <div className="modal-footer">
-          <button className="btn btn-ghost" onClick={() => setProposals(generate())}>
+          <button className="btn btn-ghost" onClick={() => setProposals((p) => generate(p))}>
             <RotateCcw size={14} /> Re-generar
           </button>
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
           <button
-            className="btn"
-            disabled={proposals.filter((p) => !p.isExisting).length === 0}
-            onClick={() => onConfirm(proposals.filter((p) => !p.isExisting))}
+            className="btn btn-primary"
+            disabled={selectedCount === 0}
+            onClick={() => onConfirm(
+              proposed.filter(([, p]) => p.selected).map(([k, p]) => {
+                const [day, ...rest] = k.split('-')
+                return { displayDay: Number(day), slotKey: rest.join('-'), dishName: p.dishName }
+              })
+            )}
           >
-            Guardar propuesta
+            Guardar {selectedCount || ''} {selectedCount === 1 ? 'elegido' : 'elegidos'}
           </button>
         </div>
       </div>
@@ -1908,6 +2208,14 @@ export default function App() {
     const row = { id: Date.now().toString(), name }
     setSavedRecipes((prev) => [...prev, row])
     try { await dbInsert('v2_saved_recipes', row) } catch { reloadRecipes() }
+    return row.id
+  }
+
+  // Abre la ficha de una receta por nombre; si el plato aún no tiene receta, la crea
+  async function openRecipeByName(name) {
+    const key = (name || '').trim().toLowerCase()
+    const found = savedRecipes.find((r) => (r.name || '').trim().toLowerCase() === key)
+    setRecipeDetailId(found ? found.id : await addRecipe(name.trim()))
   }
   async function updateRecipe(id, patch) {
     setSavedRecipes((prev) => prev.map((r) => r.id === id ? { ...r, ...patch } : r))
@@ -2074,6 +2382,7 @@ export default function App() {
         ings = await dbGet('v2_ingredients')
       }
       setIngredients(ings)
+      loadDishIngMap()
       setLoading(false)
     } catch (e) {
       showToast('Error al cargar ingredientes: ' + e.message)
@@ -2092,6 +2401,7 @@ export default function App() {
       const boardSlots = rawSlots || []
       if (!boardSlots.length) {
         setSlots([])
+        loadAllSlots()
         return
       }
       const enriched = await Promise.all(
@@ -3130,6 +3440,25 @@ export default function App() {
         />
       )}
 
+      {/* El menú sugerido va antes que el editor de receta para que el editor se abra por encima */}
+      {autoMenuOpen && (
+        <AutoMenuModal
+          slots={slots}
+          allSlots={allSlots}
+          poolItems={poolItems}
+          savedRecipes={savedRecipes}
+          ingredients={ingredients}
+          dishIngMap={dishIngMap}
+          allTags={allTags}
+          weekKey={weekKey}
+          nextWeekKey={nextWeekKey}
+          startDayOfWeek={startDayOfWeek}
+          onClose={() => setAutoMenuOpen(false)}
+          onConfirm={handleAutoMenuConfirm}
+          onOpenRecipe={openRecipeByName}
+        />
+      )}
+
       {recipeDetailId && savedRecipes.find((r) => r.id === recipeDetailId) && (
         <RecipeDetailModal
           recipe={savedRecipes.find((r) => r.id === recipeDetailId)}
@@ -3149,20 +3478,6 @@ export default function App() {
           ingredients={ingredients}
           onClose={() => { setCartRecipeId(null); setCartIdsOverride(null) }}
           onConfirm={(selected) => { handleRecipeToCart(selected); setCartIdsOverride(null) }}
-        />
-      )}
-
-      {autoMenuOpen && (
-        <AutoMenuModal
-          slots={slots}
-          poolItems={poolItems}
-          savedRecipes={savedRecipes}
-          ingredients={ingredients}
-          weekKey={weekKey}
-          nextWeekKey={nextWeekKey}
-          startDayOfWeek={startDayOfWeek}
-          onClose={() => setAutoMenuOpen(false)}
-          onConfirm={handleAutoMenuConfirm}
         />
       )}
 
