@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo, useRef } from 'react'
 import {
   DndContext,
   DragOverlay,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   useSensor,
   useSensors,
   useDroppable,
@@ -32,6 +33,7 @@ import {
   Tag,
   Wand2,
   BookOpen,
+  MoreHorizontal,
 } from 'lucide-react'
 import supabase, { dbGet, dbInsert, dbUpdate, dbDelete } from './supabase.js'
 import { INGREDIENT_CATEGORIES, DEFAULT_INGREDIENTS } from './ingredients.js'
@@ -352,16 +354,39 @@ function DroppableTrayZone({ id, children, className = '' }) {
   )
 }
 
+// Fila única de la lista de la compra: mismo aspecto para ingredientes de platos y artículos manuales.
+// note = de dónde viene ("Paella, Lentejas" / "para: Lentejas" / "extra").
+function ShoppingRow({ name, checked, onCheck, note, onRemove, removeTitle, handle, nameProps = {}, rowRef, style }) {
+  return (
+    <div ref={rowRef} style={style} className={`shopping-item${checked ? ' purchased' : ''}`}>
+      {handle || <span className="shopping-drag-spacer" />}
+      <input type="checkbox" checked={checked} onChange={onCheck} />
+      <div className="shopping-item-text" onClick={onCheck}>
+        <span className="shopping-item-name" {...nameProps}>{titleCase(name)}</span>
+        {note && <span className="shopping-item-note">{note}</span>}
+      </div>
+      <button className="shopping-item-remove" title={removeTitle} onPointerDown={(e) => e.stopPropagation()} onClick={onRemove}>
+        <X size={12} />
+      </button>
+    </div>
+  )
+}
+
 function DraggableCustomShoppingItem({ item, isPurchased, onCheck, onDelete }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({ id: `shopping-custom-${item.id}` })
   const style = { transform: CSS.Translate.toString(transform), opacity: isDragging ? 0.3 : 1 }
   return (
-    <div ref={setNodeRef} style={style} className={`shopping-item${isPurchased ? ' purchased' : ''}`}>
-      <span ref={setActivatorNodeRef} className="shopping-drag-handle" {...attributes} {...listeners}>⠿</span>
-      <input type="checkbox" checked={isPurchased} onChange={onCheck} />
-      <span className="shopping-item-name">{titleCase(item.name)}</span>
-      <button className="postit-btn delete" style={{ opacity: 0.5, flexShrink: 0 }} onPointerDown={(e) => e.stopPropagation()} onClick={onDelete}><X size={10} /></button>
-    </div>
+    <ShoppingRow
+      rowRef={setNodeRef}
+      style={style}
+      name={item.name}
+      checked={isPurchased}
+      onCheck={onCheck}
+      note={item.source ? `para: ${titleCase(item.source)}` : 'extra'}
+      onRemove={onDelete}
+      removeTitle="Quitar de la lista"
+      handle={<span ref={setActivatorNodeRef} className="shopping-drag-handle" {...attributes} {...listeners}>⠿</span>}
+    />
   )
 }
 
@@ -374,7 +399,7 @@ function DroppableShoppingCat({ category, children }) {
   )
 }
 
-function DraggablePostit({ slot, ingredients, colorOverrides, onEdit, onDelete, onContextMenu }) {
+function DraggablePostit({ slot, ingredients, colorOverrides, onEdit, onDelete, onContextMenu, onOpen }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({ id: slot.id })
   const overrideCategory = colorOverrides?.[slot.id] || null
   const category = overrideCategory || getDominantCategory(slot.ingredient_ids, ingredients, slot.dish_name)
@@ -399,6 +424,8 @@ function DraggablePostit({ slot, ingredients, colorOverrides, onEdit, onDelete, 
         slot={slot}
         onEdit={onEdit}
         onDelete={onDelete}
+        onOpen={onOpen}
+        onMenu={(pos) => onContextMenu(pos, slot)}
         dragHandleRef={setActivatorNodeRef}
         dragListeners={listeners}
         dragAttributes={attributes}
@@ -407,13 +434,32 @@ function DraggablePostit({ slot, ingredients, colorOverrides, onEdit, onDelete, 
   )
 }
 
-function PostitContent({ slot, onEdit, onDelete, dragHandleRef, dragListeners, dragAttributes }) {
+function PostitContent({ slot, onEdit, onDelete, onOpen, onMenu, dragHandleRef, dragListeners, dragAttributes }) {
   const effort = slot.effort_override || 1
   return (
     <>
       <div className="postit-header">
-        <span className="postit-name">{titleCase(slot.dish_name)}</span>
+        <span
+          className="postit-name"
+          onDoubleClick={() => onOpen?.(slot)}
+          onClick={() => { if (window.matchMedia('(pointer: coarse)').matches) onOpen?.(slot) }}
+          title="Doble clic para ver la receta"
+        >{titleCase(slot.dish_name)}</span>
         <div className="postit-actions">
+          {onMenu && (
+            <button
+              className="postit-btn"
+              title="Más opciones"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation()
+                const r = e.currentTarget.getBoundingClientRect()
+                onMenu({ clientX: r.left, clientY: r.bottom + 4 })
+              }}
+            >
+              <MoreHorizontal size={12} />
+            </button>
+          )}
           <button
             className="postit-btn"
             title="Editar"
@@ -438,6 +484,20 @@ function PostitContent({ slot, onEdit, onDelete, dragHandleRef, dragListeners, d
             <div key={n} className={`effort-dot${n <= effort ? ` active-${effort}` : ''}`} />
           ))}
         </div>
+        {onMenu && (
+          <button
+            className="postit-btn postit-more-touch"
+            title="Más opciones"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation()
+              const r = e.currentTarget.getBoundingClientRect()
+              onMenu({ clientX: r.left, clientY: r.bottom + 4 })
+            }}
+          >
+            <MoreHorizontal size={14} />
+          </button>
+        )}
         {dragHandleRef && (
           <div
             ref={dragHandleRef}
@@ -1693,9 +1753,129 @@ function AutoMenuModal({
   )
 }
 
+// ─── Despensa: platos e ingredientes disponibles ──────────────────────────────
+
+const PANTRY_LOCATIONS = [
+  { key: 'freezer', label: 'Congelador', emoji: '🧊' },
+  { key: 'fridge', label: 'Nevera', emoji: '❄️' },
+  { key: 'pantry', label: 'Despensa', emoji: '🥫' },
+]
+
+function PantryModal({ mode, item, ingredients, onClose, onSave, onIngredientAdded }) {
+  const editing = !!item
+  const [name, setName] = useState(item?.dish_name || '')
+  const [selectedIds, setSelectedIds] = useState([])
+  const [location, setLocation] = useState(item?.location || '')
+  const [note, setNote] = useState(item?.note || '')
+  const [error, setError] = useState(null)
+  const [saving, setSaving] = useState(false)
+
+  const pickingIngredients = mode === 'ingredient' && !editing
+  const canSave = pickingIngredients ? selectedIds.length > 0 : name.trim().length > 0
+
+  const handleSave = async () => {
+    if (!canSave || saving) return
+    setSaving(true)
+    try {
+      await onSave({ id: item?.id, mode, name: name.trim(), ingredientIds: selectedIds, location: location || null, note: note.trim() || null })
+      onClose()
+    } catch (e) {
+      setError(e.message)
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="modal-header">
+          <h3>
+            {editing ? 'Editar' : mode === 'ingredient' ? '🥕 Ingredientes disponibles' : '🍲 Plato en la despensa'}
+          </h3>
+          <button className="modal-close" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body">
+          {pickingIngredients ? (
+            <div className="form-field">
+              <label className="form-label">¿Qué tienes?</label>
+              <IngredientPicker
+                ingredients={ingredients}
+                selectedIds={selectedIds}
+                onChange={setSelectedIds}
+                onIngredientAdded={onIngredientAdded}
+                onError={setError}
+              />
+            </div>
+          ) : (
+            <div className="form-field">
+              <label className="form-label">{mode === 'ingredient' ? 'Ingrediente' : 'Plato'}</label>
+              <input
+                className="form-input"
+                value={name}
+                disabled={mode === 'ingredient'}
+                placeholder="Ej: Lasaña casera"
+                onChange={(e) => setName(e.target.value)}
+                autoFocus={mode === 'dish'}
+              />
+            </div>
+          )}
+
+          <div className="form-field">
+            <label className="form-label">Dónde está</label>
+            <div className="type-selector">
+              {PANTRY_LOCATIONS.map((l) => (
+                <button
+                  key={l.key}
+                  type="button"
+                  className={`type-btn${location === l.key ? ' selected' : ''}`}
+                  onClick={() => setLocation(location === l.key ? '' : l.key)}
+                >
+                  {l.emoji} {l.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="form-field">
+            <label className="form-label">Nota (opcional)</label>
+            <input
+              className="form-input"
+              value={note}
+              placeholder="Ej: 2 raciones, caduca el viernes…"
+              onChange={(e) => setNote(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSave() }}
+            />
+          </div>
+
+          {error && <div style={{ color: '#dc2626', fontSize: 12 }}>{error}</div>}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" onClick={handleSave} disabled={!canSave || saving}>
+            {saving ? 'Guardando…' : editing ? 'Guardar' : pickingIngredients ? `Añadir ${selectedIds.length || ''}` : 'Añadir'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PantryIngredientChip({ item, ingredient, onEdit, onDelete }) {
+  const loc = PANTRY_LOCATIONS.find((l) => l.key === item.location)
+  const bg = CATEGORY_PASTELS[ingredient?.category] ?? CATEGORY_PASTELS['Otros']
+  return (
+    <div className="pantry-chip" style={{ background: bg }}>
+      {loc && <span title={loc.label}>{loc.emoji}</span>}
+      <button className="pantry-chip-name" onClick={onEdit} title="Editar">{titleCase(item.dish_name)}</button>
+      {item.note && <span className="pantry-chip-note">{item.note}</span>}
+      <button className="pantry-chip-x" onClick={onDelete} title="Quitar de la despensa"><X size={11} /></button>
+    </div>
+  )
+}
+
 // ─── PoolPostit ───────────────────────────────────────────────────────────────
 
-function PoolPostit({ item, ingredients, onUpdate, onDelete, onContextMenu, typeOverride = null, savedIds = [] }) {
+function PoolPostit({ item, ingredients, onUpdate, onDelete, onContextMenu, onEditDetails, typeOverride = null, savedIds = [] }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({ id: `pool-${item.id}` })
   const [editing, setEditing] = useState(!item.dish_name)
   const [draft, setDraft] = useState(item.dish_name)
@@ -1746,7 +1926,7 @@ function PoolPostit({ item, ingredients, onUpdate, onDelete, onContextMenu, type
           </span>
         )}
         <div className="postit-actions">
-          <button className="postit-btn" onPointerDown={(e) => e.stopPropagation()} onClick={() => setEditing(true)} title="Editar nombre">
+          <button className="postit-btn" onPointerDown={(e) => e.stopPropagation()} onClick={() => onEditDetails?.()} title="Editar (nombre, dónde está, nota)">
             <Pencil size={11} />
           </button>
           <button className="postit-btn delete" onPointerDown={(e) => e.stopPropagation()} onClick={onDelete}>
@@ -1755,7 +1935,11 @@ function PoolPostit({ item, ingredients, onUpdate, onDelete, onContextMenu, type
         </div>
       </div>
       <div className="postit-footer">
-        <div />
+        {(item.location || item.note) ? (
+          <span className="pool-loc" title={item.note || ''}>
+            {PANTRY_LOCATIONS.find((l) => l.key === item.location)?.emoji} {item.note}
+          </span>
+        ) : <div />}
         <div ref={setActivatorNodeRef} {...listeners} {...attributes} className="drag-handle" title="Arrastrar al tablero">
           <GripVertical size={12} />
         </div>
@@ -1766,7 +1950,7 @@ function PoolPostit({ item, ingredients, onUpdate, onDelete, onContextMenu, type
 
 // ─── PostitContextMenu ────────────────────────────────────────────────────────
 
-function PostitContextMenu({ menu, onRecipe, onCopy, onMove, onSendToPool, onChangeType, onClose }) {
+function PostitContextMenu({ menu, onOpen, onEdit, onDelete, onRecipe, onCopy, onMove, onSendToPool, onChangeType, onClose }) {
   const [showTypes, setShowTypes] = useState(false)
   const ref = useRef(null)
 
@@ -1780,9 +1964,22 @@ function PostitContextMenu({ menu, onRecipe, onCopy, onMove, onSendToPool, onCha
     <div
       ref={ref}
       className="context-menu"
-      style={{ top: menu.y, left: menu.x }}
+      style={{
+        top: Math.max(8, Math.min(menu.y, window.innerHeight - 300)),
+        left: Math.max(8, Math.min(menu.x, window.innerWidth - 200)),
+      }}
       onContextMenu={(e) => e.preventDefault()}
     >
+      {!menu.isPool && (
+        <button className="context-menu-item" onMouseDown={() => { onOpen(menu.slot); onClose() }}>
+          <BookOpen size={13} /> Ver receta e ingredientes
+        </button>
+      )}
+      {!menu.isPool && (
+        <button className="context-menu-item" onMouseDown={() => { onEdit(menu.slot); onClose() }}>
+          <Pencil size={13} /> Editar plato
+        </button>
+      )}
       <button className="context-menu-item" onMouseDown={() => { onRecipe(menu.slot); onClose() }}>
         <ChefHat size={13} /> Buscar receta IA
       </button>
@@ -1821,6 +2018,11 @@ function PostitContextMenu({ menu, onRecipe, onCopy, onMove, onSendToPool, onCha
           </div>
         )}
       </div>
+      {!menu.isPool && (
+        <button className="context-menu-item context-menu-danger" onMouseDown={() => { onDelete(menu.slot); onClose() }}>
+          <Trash2 size={13} /> Eliminar del menú
+        </button>
+      )}
     </div>
   )
 }
@@ -2277,6 +2479,30 @@ export default function App() {
     try { await supabase.from('v2_dismissed').delete().eq('week_key', weekKey) } catch { reloadDismissed() }
   }
 
+  // Lo marcado como comprado se guarda por semana y se comparte en tiempo real
+  async function reloadPurchased() {
+    try {
+      const rows = await dbGet('v2_purchased', { week_key: weekKey })
+      setPurchasedIds(new Set(rows.map((r) => r.item_key)))
+    } catch {}
+  }
+  async function setPurchased(key, on) {
+    setPurchasedIds((prev) => {
+      const next = new Set(prev)
+      if (on) next.add(key)
+      else next.delete(key)
+      return next
+    })
+    try {
+      if (on) await supabase.from('v2_purchased').upsert({ week_key: weekKey, item_key: key }, { onConflict: 'week_key,item_key' })
+      else await supabase.from('v2_purchased').delete().eq('week_key', weekKey).eq('item_key', key)
+    } catch { reloadPurchased() }
+  }
+  async function clearPurchased() {
+    setPurchasedIds(new Set())
+    try { await supabase.from('v2_purchased').delete().eq('week_key', weekKey) } catch { reloadPurchased() }
+  }
+
   async function reloadColorOverrides() {
     try {
       const rows = await dbGet('v2_color_overrides')
@@ -2301,6 +2527,29 @@ export default function App() {
   const [recipeDetailId, setRecipeDetailId] = useState(null)
   const [cartRecipeId, setCartRecipeId] = useState(null)
   const [cartIdsOverride, setCartIdsOverride] = useState(null)
+  const [pantryModal, setPantryModal] = useState(null) // { mode: 'dish' | 'ingredient', item? }
+
+  // La despensa mezcla platos e ingredientes disponibles
+  const poolDishes = useMemo(() => poolItems.filter((p) => (p.kind || 'dish') === 'dish'), [poolItems])
+  const pantryIngredients = useMemo(() => poolItems.filter((p) => p.kind === 'ingredient'), [poolItems])
+
+  async function handleSavePantry({ id, mode, name, ingredientIds, location, note }) {
+    if (id) {
+      await updatePoolItem(id, mode === 'ingredient' ? { location, note } : { dish_name: name, location, note })
+      return
+    }
+    if (mode === 'ingredient') {
+      const already = new Set(pantryIngredients.map((p) => p.ingredient_id))
+      for (const ingId of ingredientIds) {
+        const ing = ingredients.find((i) => i.id === ingId)
+        if (!ing || already.has(ingId)) continue
+        await addPoolItem({ kind: 'ingredient', ingredient_id: ingId, dish_name: ing.name, location, note })
+      }
+      showToast(`${ingredientIds.length} ingrediente${ingredientIds.length !== 1 ? 's' : ''} en la despensa`)
+      return
+    }
+    await addPoolItem({ kind: 'dish', dish_name: name, location, note })
+  }
 
   // nombre de plato (minúsculas) → { nivelEsfuerzo: [ids de ingredientes] }
   async function loadDishIngMap() {
@@ -2324,7 +2573,9 @@ export default function App() {
   const initDone = useRef(false)
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
+    // Ratón: arrastra tras 8px. Táctil: pulsación larga (así el scroll del tablero sigue funcionando)
+    useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 8 } })
   )
 
   useEffect(() => {
@@ -2363,7 +2614,9 @@ export default function App() {
     if (!currentUser) return
     reloadCustomItems()
     reloadDismissed()
+    reloadPurchased()
     const channels = [
+      supabase.channel(`rt:purchased:${weekKey}`).on('postgres_changes', { event: '*', schema: 'public', table: 'v2_purchased', filter: `week_key=eq.${weekKey}` }, reloadPurchased).subscribe(),
       supabase.channel(`rt:custom:${weekKey}`).on('postgres_changes', { event: '*', schema: 'public', table: 'v2_custom_items', filter: `week_key=eq.${weekKey}` }, reloadCustomItems).subscribe(),
       supabase.channel(`rt:dismissed:${weekKey}`).on('postgres_changes', { event: '*', schema: 'public', table: 'v2_dismissed', filter: `week_key=eq.${weekKey}` }, reloadDismissed).subscribe(),
     ]
@@ -2609,12 +2862,7 @@ export default function App() {
     removeCustomItemRow(id)
   }
   function toggleCustomItem(id) {
-    setPurchasedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has('custom_' + id)) next.delete('custom_' + id)
-      else next.add('custom_' + id)
-      return next
-    })
+    setPurchased('custom_' + id, !purchasedIds.has('custom_' + id))
   }
 
   // Guarda tipo y pasos en la receta, y sus ingredientes en el plato con el mismo nombre
@@ -2640,8 +2888,8 @@ export default function App() {
     showToast('Receta guardada ✓')
   }
 
-  function handleRecipeToCart(selected) {
-    for (const ing of selected) addCustomItemRow({ name: ing.name, category: ing.category || 'Otros' })
+  function handleRecipeToCart(selected, recipeName) {
+    for (const ing of selected) addCustomItemRow({ name: ing.name, category: ing.category || 'Otros', source: recipeName })
     setCartRecipeId(null)
     showToast(`${selected.length} ingrediente${selected.length !== 1 ? 's' : ''} añadido${selected.length !== 1 ? 's' : ''} a la compra`)
   }
@@ -2792,12 +3040,7 @@ export default function App() {
   const purchasedCount = allItemIds.filter((id) => purchasedIds.has(id)).length
 
   function togglePurchased(id) {
-    setPurchasedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+    setPurchased(id, !purchasedIds.has(id))
   }
 
   async function handleSaveAndClear() {
@@ -2816,7 +3059,7 @@ export default function App() {
     // Limpiar UI optimísticamente
     await addDismissed(checkedIngIds)
     for (const item of checkedCustom) removeCustomItemRow(item.id)
-    setPurchasedIds(new Set())
+    clearPurchased()
 
     setSavingList(true)
     try {
@@ -3062,6 +3305,7 @@ export default function App() {
                             onEdit={() => setEditModal(s)}
                             onDelete={handleDelete}
                             onContextMenu={(e, slot) => setContextMenu({ x: e.clientX, y: e.clientY, slot })}
+                            onOpen={(s) => openRecipeByName(s.dish_name)}
                           />
                         ))}
                         <div className="board-cell-add">
@@ -3123,9 +3367,14 @@ export default function App() {
               Recetas{savedRecipes.length > 0 && <span className="tray-tab-count">{savedRecipes.length}</span>}
             </button>
             {trayTab === 'pool' && (
-              <button className="btn-add-slot tray-add-btn" onClick={() => addPoolItem()}>
-                <Plus size={11} /> Nuevo
-              </button>
+              <>
+                <button className="btn-add-slot tray-add-btn" onClick={() => addPoolItem()}>
+                  <Plus size={11} /> Plato
+                </button>
+                <button className="btn-add-slot tray-add-btn" onClick={() => setPantryModal({ mode: 'ingredient' })}>
+                  <Plus size={11} /> Ingrediente
+                </button>
+              </>
             )}
             {trayTab === 'recipes' && (
               <>
@@ -3162,7 +3411,7 @@ export default function App() {
                   </div>
                 )}
                 <div className="dishes-tray-list">
-                  {poolItems.map((item) => (
+                  {poolDishes.map((item) => (
                     <PoolPostit
                       key={item.id}
                       item={item}
@@ -3171,10 +3420,29 @@ export default function App() {
                       savedIds={savedIngredientIds(dishIngMap, item.dish_name, item.effort)}
                       onUpdate={(updated) => updatePoolItem(item.id, { dish_name: updated.dish_name })}
                       onDelete={() => deletePoolItem(item.id)}
+                      onEditDetails={() => setPantryModal({ mode: 'dish', item })}
                       onContextMenu={(e, slot) => setContextMenu({ x: e.clientX, y: e.clientY, slot, isPool: true })}
                     />
                   ))}
                 </div>
+                {pantryIngredients.length > 0 && (
+                  <div className="pantry-section">
+                    <div className="pantry-section-title">🥕 Ingredientes disponibles</div>
+                    <div className="pantry-chips">
+                      {[...pantryIngredients]
+                        .sort((a, b) => (a.location || 'z').localeCompare(b.location || 'z') || a.dish_name.localeCompare(b.dish_name, 'es'))
+                        .map((item) => (
+                          <PantryIngredientChip
+                            key={item.id}
+                            item={item}
+                            ingredient={ingredients.find((i) => i.id === item.ingredient_id)}
+                            onEdit={() => setPantryModal({ mode: 'ingredient', item })}
+                            onDelete={() => deletePoolItem(item.id)}
+                          />
+                        ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </DroppableTrayZone>
           )}
@@ -3259,7 +3527,7 @@ export default function App() {
                 </button>
               )}
               {purchasedIds.size > 0 && (
-                <button className="sidebar-icon-btn" title="Desmarcar todo" onClick={() => setPurchasedIds(new Set())}>
+                <button className="sidebar-icon-btn" title="Desmarcar todo" onClick={clearPurchased}>
                   <X size={14} />
                 </button>
               )}
@@ -3304,14 +3572,21 @@ export default function App() {
                       <DroppableShoppingCat key={category} category={category}>
                         <div className="shopping-category-title" style={{ borderLeft: `3px solid ${CATEGORY_COLORS[category] ?? 'var(--accent)'}`, paddingLeft: 8 }}>{category}</div>
                         {regular.map(({ ingredient, dishes }) => (
-                          <div key={ingredient.id} className={`shopping-item${purchasedIds.has(ingredient.id) ? ' purchased' : ''}`}>
-                            <input type="checkbox" checked={purchasedIds.has(ingredient.id)} onChange={() => togglePurchased(ingredient.id)} />
-                            <span className="shopping-item-name"
-                              onMouseEnter={(e) => setPopover({ ingredient, position: { x: e.clientX, y: e.clientY } })}
-                              onMouseLeave={() => setPopover(null)}
-                            >{titleCase(ingredient.name)}</span>
-                            <span className="shopping-item-dishes">{dishes.length}</span>
-                          </div>
+                          <ShoppingRow
+                            key={ingredient.id}
+                            name={ingredient.name}
+                            checked={purchasedIds.has(ingredient.id)}
+                            onCheck={() => togglePurchased(ingredient.id)}
+                            note={dishes.length > 2
+                              ? `${dishes.slice(0, 2).map(titleCase).join(', ')} +${dishes.length - 2}`
+                              : dishes.map(titleCase).join(', ')}
+                            onRemove={() => addDismissed([ingredient.id])}
+                            removeTitle="Ya lo tengo: quitar de la lista"
+                            nameProps={{
+                              onMouseEnter: (e) => setPopover({ ingredient, position: { x: e.clientX, y: e.clientY } }),
+                              onMouseLeave: () => setPopover(null),
+                            }}
+                          />
                         ))}
                         {custom.map((item) => (
                           <DraggableCustomShoppingItem
@@ -3415,6 +3690,9 @@ export default function App() {
       {contextMenu && (
         <PostitContextMenu
           menu={contextMenu}
+          onOpen={(slot) => openRecipeByName(slot.dish_name)}
+          onEdit={(slot) => setEditModal(slot)}
+          onDelete={(slot) => handleDelete(slot.id)}
           onRecipe={(slot) => setRecipeModal(slot)}
           onCopy={(slot) => { setCopyingSlot(slot); setMovingSlot(null); showToast(`Copiando "${titleCase(slot.dish_name)}" — elige dónde pegar`) }}
           onMove={(slot) => { setMovingSlot(slot); setCopyingSlot(null); showToast(`Moviendo "${titleCase(slot.dish_name)}" — elige destino`) }}
@@ -3440,12 +3718,24 @@ export default function App() {
         />
       )}
 
+      {pantryModal && (
+        <PantryModal
+          mode={pantryModal.mode}
+          item={pantryModal.item}
+          ingredients={ingredients}
+          onClose={() => setPantryModal(null)}
+          onSave={handleSavePantry}
+          onIngredientAdded={handleIngredientAdded}
+        />
+      )}
+
       {/* El menú sugerido va antes que el editor de receta para que el editor se abra por encima */}
       {autoMenuOpen && (
         <AutoMenuModal
           slots={slots}
           allSlots={allSlots}
-          poolItems={poolItems}
+          poolItems={poolDishes}
+          availableIds={pantryIngredients.map((p) => p.ingredient_id).filter(Boolean)}
           savedRecipes={savedRecipes}
           ingredients={ingredients}
           dishIngMap={dishIngMap}
@@ -3477,7 +3767,7 @@ export default function App() {
           ingredientIds={cartIdsOverride || savedIngredientIds(dishIngMap, savedRecipes.find((r) => r.id === cartRecipeId).name)}
           ingredients={ingredients}
           onClose={() => { setCartRecipeId(null); setCartIdsOverride(null) }}
-          onConfirm={(selected) => { handleRecipeToCart(selected); setCartIdsOverride(null) }}
+          onConfirm={(selected) => { handleRecipeToCart(selected, savedRecipes.find((r) => r.id === cartRecipeId)?.name); setCartIdsOverride(null) }}
         />
       )}
 
