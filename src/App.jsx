@@ -231,68 +231,27 @@ function guessCategoryForItem(name, ingredients) {
   return guessCategoryFromName(name) || 'Otros'
 }
 
+// ─── IA (Gemini) ──────────────────────────────────────────────────────────────
+// Las llamadas pasan por la Edge Function "ai" de Supabase: la clave de Gemini vive allí como secreto
+// y la función solo responde a usuarios con sesión iniciada.
+
+async function callAI(action, payload = {}) {
+  const { data, error } = await supabase.functions.invoke('ai', { body: { action, ...payload } })
+  if (error) {
+    let msg = error.message
+    try { msg = (await error.context.json()).error || msg } catch {}
+    throw new Error(msg)
+  }
+  if (data?.error) throw new Error(data.error)
+  return data
+}
+
 async function callGemini(dishName, effortLevel, ingredientNames) {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY
-  if (!apiKey) throw new Error('VITE_GEMINI_API_KEY no configurada')
-
-  const effortDesc =
-    effortLevel === 1
-      ? 'fácil (usando preparados y conservas)'
-      : effortLevel === 2
-      ? 'medio (mezcla de frescos y preparados)'
-      : 'casero (todo desde cero con ingredientes frescos)'
-
-  const prompt = `Eres un asistente de cocina español. Para el plato "${dishName}" con nivel de esfuerzo ${effortDesc}, necesito dos cosas:
-1. Ingredientes de esta lista que se necesitan para el plato: ${ingredientNames.join(', ')}
-2. Ingredientes adicionales importantes para este plato que NO aparecen en la lista anterior (máximo 5, nombres simples en español)
-
-Responde ÚNICAMENTE con este JSON (sin texto adicional):
-{"existing": ["nombre exacto tal como aparece en la lista", ...], "new": ["ingrediente nuevo en español", ...]}`
-
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { response_mime_type: 'application/json' },
-      }),
-    }
-  )
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err?.error?.message || `Gemini error ${res.status}`)
-  }
-
-  const data = await res.json()
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text
-  if (!text) throw new Error('Respuesta vacía de Gemini')
-  const parsed = JSON.parse(text)
-  return {
-    existing: Array.isArray(parsed.existing) ? parsed.existing : [],
-    new: Array.isArray(parsed.new) ? parsed.new : [],
-  }
+  return await callAI('dish_ingredients', { dishName, effortLevel, ingredientNames })
 }
 
 async function callGeminiRecipe(dishName) {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY
-  if (!apiKey) throw new Error('VITE_GEMINI_API_KEY no configurada')
-  const prompt = `Explica cómo preparar "${dishName}" de forma sencilla para un cocinero doméstico. Máximo 6 pasos cortos y claros. Responde en español, sin formato markdown, solo texto plano con pasos numerados.`
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-    }
-  )
-  if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err?.error?.message || `Error ${res.status}`) }
-  const data = await res.json()
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text
-  if (!text) throw new Error('Respuesta vacía')
-  return text.trim()
+  return (await callAI('recipe_steps', { dishName })).text
 }
 
 function getDietWarnings(slots, ingredients, colorOverrides, startDayOfWeek = 0, weekKey = null, nextWeekKey = null) {
@@ -1050,6 +1009,8 @@ function RecipePostit({ item, onUpdate, onDelete, onSelect, onOpenDetail, onCart
             title={`${n} estrella${n > 1 ? 's' : ''}`}
           >★</button>
         ))}
+        {item.time_min ? <span className="recipe-meta" title="Tiempo de preparación">⏱{item.time_min}'</span> : null}
+        {item.light === 'ligero' ? <span className="recipe-meta" title="Ligero">🥗</span> : null}
         {usageCount > 0 && <span className="recipe-usage">{usageCount}×</span>}
       </div>
 
@@ -1154,6 +1115,8 @@ function RecipeDetailModal({ recipe, ingredients, dishIngMap, onClose, onSave, o
   const [selectedIds, setSelectedIds] = useState(() => savedIngredientIds(dishIngMap, recipe.name))
   const [type, setType] = useState(recipe.type || '')
   const [steps, setSteps] = useState(recipe.steps || '')
+  const [timeMin, setTimeMin] = useState(recipe.time_min || null)
+  const [light, setLight] = useState(recipe.light || '')
   const [aiLoading, setAiLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -1182,7 +1145,7 @@ function RecipeDetailModal({ recipe, ingredients, dishIngMap, onClose, onSave, o
     setSaving(true)
     setError(null)
     try {
-      await onSave({ recipe, effort, ingredientIds: selectedIds, type, steps })
+      await onSave({ recipe, effort, ingredientIds: selectedIds, type, steps, timeMin, light })
       onClose()
     } catch (e) {
       setError(e.message)
@@ -1223,22 +1186,19 @@ function RecipeDetailModal({ recipe, ingredients, dishIngMap, onClose, onSave, o
             </div>
           </div>
 
-          {/* Pasos */}
+          {/* Tiempo y ligereza */}
           <div className="form-field">
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-              <label className="form-label">Pasos</label>
-              <button type="button" className="ai-suggest-btn" onClick={handleAiSteps} disabled={aiLoading}>
-                <Sparkles size={13} />
-                {aiLoading ? 'Consultando IA…' : 'Generar con IA'}
-              </button>
+            <label className="form-label">Tiempo y ligereza</label>
+            <div className="type-selector" style={{ marginBottom: 8 }}>
+              {[[15, '⚡ 15 min'], [30, '30 min'], [45, '45 min'], [60, '1 h o más']].map(([n, label]) => (
+                <button key={n} type="button" className={`type-btn${timeMin === n ? ' selected' : ''}`} onClick={() => setTimeMin(timeMin === n ? null : n)}>{label}</button>
+              ))}
             </div>
-            <textarea
-              className="recipe-steps-input"
-              placeholder={'1. Sofreír la cebolla\n2. Añadir el arroz…'}
-              value={steps}
-              onChange={(e) => setSteps(e.target.value)}
-              rows={6}
-            />
+            <div className="type-selector">
+              {[['ligero', '🥗 Ligero'], ['equilibrado', '⚖️ Equilibrado'], ['contundente', '🍖 Contundente']].map(([k, label]) => (
+                <button key={k} type="button" className={`type-btn${light === k ? ' selected' : ''}`} onClick={() => setLight(light === k ? '' : k)}>{label}</button>
+              ))}
+            </div>
           </div>
 
           {/* Ingredientes */}
@@ -1262,6 +1222,24 @@ function RecipeDetailModal({ recipe, ingredients, dishIngMap, onClose, onSave, o
               onChange={setSelectedIds}
               onIngredientAdded={onIngredientAdded}
               onError={setError}
+            />
+          </div>
+
+          {/* Pasos */}
+          <div className="form-field">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <label className="form-label">Pasos</label>
+              <button type="button" className="ai-suggest-btn" onClick={handleAiSteps} disabled={aiLoading}>
+                <Sparkles size={13} />
+                {aiLoading ? 'Consultando IA…' : 'Generar con IA'}
+              </button>
+            </div>
+            <textarea
+              className="recipe-steps-input"
+              placeholder={'1. Sofreír la cebolla\n2. Añadir el arroz…'}
+              value={steps}
+              onChange={(e) => setSteps(e.target.value)}
+              rows={6}
             />
           </div>
 
@@ -1356,6 +1334,11 @@ const AUTO_MENU_DEFAULTS = {
   avoidSameType: true,
   balanceTypes: true,
   noRepeat: true,
+  maxTime: null,
+  onlyLight: false,
+  fewIngredients: false,
+  types: [],
+  pantryMode: 'prefer',
 }
 
 function loadAutoMenuOptions() {
@@ -1368,7 +1351,7 @@ function loadAutoMenuOptions() {
 }
 
 function AutoMenuModal({
-  slots, allSlots, poolItems, savedRecipes, ingredients, dishIngMap, allTags,
+  slots, allSlots, poolItems, savedRecipes, ingredients, dishIngMap, allTags, availableIds = [],
   weekKey, nextWeekKey, startDayOfWeek, onClose, onConfirm, onOpenRecipe,
 }) {
   const [opts, setOptsRaw] = useState(loadAutoMenuOptions)
@@ -1376,6 +1359,8 @@ function AutoMenuModal({
   const [sheetKey, setSheetKey] = useState(null)
   const [swapQuery, setSwapQuery] = useState('')
   const [swapping, setSwapping] = useState(false)
+  const [avail, setAvail] = useState([])
+  const [showAvail, setShowAvail] = useState(false)
   const setOpts = (patch) => setOptsRaw((o) => {
     const next = { ...o, ...patch }
     try { localStorage.setItem('autoMenuOptions', JSON.stringify(next)) } catch {}
@@ -1414,14 +1399,24 @@ function AutoMenuModal({
     if (opts.fromPool) poolItems.forEach((p) => add(p.dish_name))
     if (opts.fromRecipes) savedRecipes.forEach((r) => add(r.name))
     return [...m.entries()]
-      .filter(([k]) => {
+      .filter(([k, name]) => {
         const r = recipeByName.get(k)
         if (opts.tag && !(r?.tags || []).includes(opts.tag)) return false
         if (opts.minRating && (r?.rating || 0) < opts.minRating) return false
+        if (opts.maxTime && !(r?.time_min && r.time_min <= opts.maxTime)) return false
+        if (opts.onlyLight && r?.light !== 'ligero') return false
+        if (opts.fewIngredients) {
+          const n = savedIngredientIds(dishIngMap, name).length
+          if (!(n >= 1 && n <= 6)) return false
+        }
+        if (opts.types.length && !opts.types.includes(typeOf(name))) return false
+        if (avail.length && opts.pantryMode === 'only') {
+          if (!savedIngredientIds(dishIngMap, name).some((id) => avail.includes(id))) return false
+        }
         return true
       })
       .map(([, name]) => name)
-  }, [opts.fromPool, opts.fromRecipes, opts.tag, opts.minRating, poolItems, savedRecipes, recipeByName])
+  }, [opts.fromPool, opts.fromRecipes, opts.tag, opts.minRating, opts.maxTime, opts.onlyLight, opts.fewIngredients, opts.types, opts.pantryMode, avail, dishIngMap, poolItems, savedRecipes, recipeByName])
 
   const cellKey = (i, slotKey) => `${i}-${slotKey}`
 
@@ -1481,6 +1476,10 @@ function AutoMenuModal({
             const days = lastUsed[key] ? (now - lastUsed[key]) / 86400000 : 60
             score += Math.min(days, 60) / 60 * 1.5
           }
+          if (avail.length && opts.pantryMode !== 'ignore') {
+            const overlap = savedIngredientIds(dishIngMap, name).filter((id) => avail.includes(id)).length
+            score += Math.min(overlap, 3) * 1.2
+          }
           if (opts.avoidSameType && countable && neighbours.includes(t)) score -= 3
           if (opts.balanceTypes && countable) score -= 0.8 * (typeCount[t] || 0)
           if (score > bestScore) { bestScore = score; best = name }
@@ -1503,7 +1502,7 @@ function AutoMenuModal({
     if (firstRun.current) { firstRun.current = false; return }
     setProposals((p) => generate(p))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [opts])
+  }, [opts, avail])
 
   const entries = Object.entries(proposals)
   const proposed = entries.filter(([, p]) => !p.isExisting)
@@ -1561,6 +1560,61 @@ function AutoMenuModal({
 
           {showOpts && (
             <div className="auto-menu-opts">
+              <div className="auto-opt-group">
+                <span className="auto-opt-title">Atajos</span>
+                <button className="auto-day-chip" onClick={() => setOpts({ maxTime: 15, onlyLight: false })}>⚡ Rápidas</button>
+                <button className="auto-day-chip" onClick={() => setOpts({ onlyLight: true, maxTime: null })}>🥗 Ligeras</button>
+                <button className="auto-day-chip" onClick={() => { setAvail(availableIds); setOpts({ pantryMode: 'prefer' }) }}>🧊 Con lo que tengo</button>
+                <button className="auto-day-chip" onClick={() => { setAvail([]); setOpts({ maxTime: null, onlyLight: false, fewIngredients: false, types: [], tag: '', minRating: 0 }) }}>Limpiar filtros</button>
+              </div>
+              <div className="auto-opt-group">
+                <span className="auto-opt-title">Tiempo</span>
+                {[[15, '⚡ ≤ 15 min'], [30, '≤ 30 min'], [45, '≤ 45 min']].map(([n, label]) => (
+                  <button key={n} className={`auto-day-chip${opts.maxTime === n ? ' on' : ''}`} onClick={() => setOpts({ maxTime: opts.maxTime === n ? null : n })}>{label}</button>
+                ))}
+                <label className="auto-opt-check"><input type="checkbox" checked={opts.onlyLight} onChange={(e) => setOpts({ onlyLight: e.target.checked })} />Solo ligeras</label>
+                <label className="auto-opt-check"><input type="checkbox" checked={opts.fewIngredients} onChange={(e) => setOpts({ fewIngredients: e.target.checked })} />Pocos ingredientes (≤ 6)</label>
+              </div>
+              <div className="auto-opt-group">
+                <span className="auto-opt-title">Tipo</span>
+                {FOOD_TYPES.map((ft) => (
+                  <button
+                    key={ft.key}
+                    className={`auto-day-chip${opts.types.includes(ft.key) ? ' on' : ''}`}
+                    onClick={() => setOpts({ types: opts.types.includes(ft.key) ? opts.types.filter((t) => t !== ft.key) : [...opts.types, ft.key] })}
+                  >
+                    {ft.emoji} {ft.label}
+                  </button>
+                ))}
+              </div>
+              <div className="auto-opt-group">
+                <span className="auto-opt-title">Ingredientes</span>
+                {availableIds.length > 0 && (
+                  <button className="auto-day-chip" onClick={() => setAvail(availableIds)}>🧊 Mi despensa ({availableIds.length})</button>
+                )}
+                <button className={`auto-day-chip${showAvail ? ' on' : ''}`} onClick={() => setShowAvail((v) => !v)}>
+                  Elegir{avail.length ? ` (${avail.length})` : ''}
+                </button>
+                {avail.length > 0 && (
+                  <>
+                    <select className="auto-opt-select" value={opts.pantryMode} onChange={(e) => setOpts({ pantryMode: e.target.value })}>
+                      <option value="prefer">Priorizar los que usen estos</option>
+                      <option value="only">Solo los que usen estos</option>
+                      <option value="ignore">Ignorar</option>
+                    </select>
+                    <button className="auto-menu-link" onClick={() => setAvail([])}>Quitar</button>
+                  </>
+                )}
+              </div>
+              {showAvail && (
+                <IngredientPicker
+                  ingredients={ingredients}
+                  selectedIds={avail}
+                  onChange={setAvail}
+                  onIngredientAdded={() => {}}
+                  onError={() => {}}
+                />
+              )}
               <div className="auto-opt-group">
                 <span className="auto-opt-title">Rellenar</span>
                 {SLOTS.map((s) => (
@@ -2132,56 +2186,66 @@ function LoginScreen() {
 
 // ─── AIRecipeProposalsModal ──────────────────────────────────────────────────
 
-async function callGeminiProposals(prefs, history) {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY
-  if (!apiKey) throw new Error('VITE_GEMINI_API_KEY no configurada')
-  const histStr = history.length ? history.slice(0, 30).join(', ') : 'ninguna'
-  const prompt = `Eres un asistente de cocina española. Sugiere 5 ideas de platos sencillos basándote en estas preferencias:
-- Tipo de comida: ${prefs.mealType || 'cualquiera'}
-- Tiempo máximo: ${prefs.maxTime || 'sin límite'}
-- Ingrediente principal o restricción: ${prefs.mainOrAvoid || 'sin restricción'}
-- Otras notas: ${prefs.notes || 'ninguna'}
-
-El usuario ya tiene en su historial: ${histStr}. Sugiere recetas DIFERENTES a las del historial cuando sea posible.
-
-Responde ÚNICAMENTE con este JSON (sin markdown):
-{"proposals":[{"name":"Nombre del plato","description":"Descripción muy breve en 1-2 frases"}]}`
-
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { response_mime_type: 'application/json' },
-      }),
-    }
-  )
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err?.error?.message || `Error ${res.status}`)
-  }
-  const data = await res.json()
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text
-  if (!text) throw new Error('Respuesta vacía')
-  const parsed = JSON.parse(text)
-  return Array.isArray(parsed.proposals) ? parsed.proposals : []
+const AI_DEFAULT_PREFS = {
+  count: 5,
+  meal: '',
+  maxTime: null,
+  light: false,
+  fewIngredients: false,
+  types: [],
+  available: [],
+  avoid: '',
+  notes: '',
 }
 
-function AIRecipeProposalsModal({ savedRecipes, onClose, onAdd }) {
+// Atajos para los casos más habituales de una pareja que come sano y a veces va con prisa
+const AI_PRESETS = [
+  { key: 'quick', label: '⚡ Rápido y ligero', apply: { maxTime: 15, light: true, fewIngredients: true } },
+  { key: 'calm', label: '🍳 Con calma', apply: { maxTime: null, light: false, fewIngredients: false } },
+  { key: 'pantry', label: '🧊 Vaciar la despensa', apply: { __pantry: true } },
+]
+
+const LIGHT_LABELS = { ligero: '🥗 Ligero', equilibrado: '⚖️ Equilibrado', contundente: '🍖 Contundente' }
+
+function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClose, onAdd }) {
   const [step, setStep] = useState('form') // 'form' | 'list'
-  const [prefs, setPrefs] = useState({ mealType: '', maxTime: '', mainOrAvoid: '', notes: '' })
+  const [prefs, setPrefs] = useState(AI_DEFAULT_PREFS)
+  const [showIngredients, setShowIngredients] = useState(false)
   const [proposals, setProposals] = useState([])
+  const [added, setAdded] = useState(new Set())
+  const [open, setOpen] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [recipeView, setRecipeView] = useState(null) // { name, body, loading }
+
+  const set = (patch) => setPrefs((p) => ({ ...p, ...patch }))
+  const toggleType = (t) => set({ types: prefs.types.includes(t) ? prefs.types.filter((x) => x !== t) : [...prefs.types, t] })
+  const applyPreset = (preset) => {
+    if (preset.apply.__pantry) set({ available: availableIds })
+    else set(preset.apply)
+  }
 
   async function handleGenerate() {
     setLoading(true)
     setError(null)
+    setAdded(new Set())
+    setOpen(null)
     try {
-      const list = await callGeminiProposals(prefs, savedRecipes.map((r) => r.name))
+      const availableNames = prefs.available.map((id) => ingredients.find((i) => i.id === id)?.name).filter(Boolean)
+      const { proposals: list } = await callAI('proposals', {
+        count: prefs.count,
+        filters: {
+          meal: prefs.meal,
+          maxTime: prefs.maxTime,
+          light: prefs.light,
+          fewIngredients: prefs.fewIngredients,
+          maxIngredients: 6,
+          types: prefs.types,
+          available: availableNames,
+          avoid: prefs.avoid,
+          notes: prefs.notes,
+        },
+        history: savedRecipes.map((r) => r.name).filter(Boolean),
+      })
       setProposals(list)
       setStep('list')
     } catch (e) {
@@ -2191,15 +2255,23 @@ function AIRecipeProposalsModal({ savedRecipes, onClose, onAdd }) {
     }
   }
 
-  async function viewRecipe(name) {
-    setRecipeView({ name, body: null, loading: true, error: null })
+  async function addOne(p, i) {
+    if (added.has(i)) return
     try {
-      const body = await callGeminiRecipe(name)
-      setRecipeView({ name, body, loading: false, error: null })
+      await onAdd(p)
+      setAdded((prev) => new Set(prev).add(i))
     } catch (e) {
-      setRecipeView({ name, body: null, loading: false, error: e.message })
+      setError('No se pudo añadir: ' + e.message)
     }
   }
+
+  async function addAll() {
+    for (const [i, p] of proposals.entries()) await addOne(p, i)
+  }
+
+  const chip = (active, label, onClick) => (
+    <button type="button" className={`type-btn${active ? ' selected' : ''}`} onClick={onClick}>{label}</button>
+  )
 
   return (
     <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
@@ -2211,52 +2283,74 @@ function AIRecipeProposalsModal({ savedRecipes, onClose, onAdd }) {
         <div className="modal-body">
           {step === 'form' && (
             <>
-              <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>
-                Cuéntanos qué te apetece y la IA propondrá 5 platos sencillos basados en tu historial.
-              </p>
+              <div className="type-selector">
+                {AI_PRESETS.map((pr) => (
+                  <button key={pr.key} type="button" className="type-btn" onClick={() => applyPreset(pr)}>{pr.label}</button>
+                ))}
+              </div>
+
               <div className="form-field">
-                <label className="form-label">Tipo de comida</label>
-                <div className="effort-selector">
-                  {['Comida', 'Cena', 'Cualquiera'].map((t) => (
-                    <button
-                      key={t}
-                      className={`effort-btn${prefs.mealType === t ? ' selected-1' : ''}`}
-                      onClick={() => setPrefs((p) => ({ ...p, mealType: t }))}
-                      type="button"
-                    >{t}</button>
-                  ))}
+                <label className="form-label">Cuántos platos</label>
+                <select className="auto-opt-select" value={prefs.count} onChange={(e) => set({ count: Number(e.target.value) })}>
+                  {Array.from({ length: 15 }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </div>
+
+              <div className="form-field">
+                <label className="form-label">Para</label>
+                <div className="type-selector">
+                  {['Comida', 'Cena'].map((t) => chip(prefs.meal === t, t, () => set({ meal: prefs.meal === t ? '' : t })))}
                 </div>
               </div>
+
               <div className="form-field">
                 <label className="form-label">Tiempo máximo</label>
-                <div className="effort-selector">
-                  {['15 min', '30 min', '1 h', 'Sin prisa'].map((t) => (
-                    <button
-                      key={t}
-                      className={`effort-btn${prefs.maxTime === t ? ' selected-2' : ''}`}
-                      onClick={() => setPrefs((p) => ({ ...p, maxTime: t }))}
-                      type="button"
-                    >{t}</button>
-                  ))}
+                <div className="type-selector">
+                  {[[15, '⚡ 15 min'], [30, '30 min'], [45, '45 min']].map(([n, label]) => chip(prefs.maxTime === n, label, () => set({ maxTime: prefs.maxTime === n ? null : n })))}
+                  {chip(prefs.maxTime === null, 'Sin prisa', () => set({ maxTime: null }))}
                 </div>
               </div>
+
               <div className="form-field">
-                <label className="form-label">Ingrediente principal o lo que evitar</label>
-                <input
-                  className="form-input"
-                  placeholder="Ej: pollo, sin gluten…"
-                  value={prefs.mainOrAvoid}
-                  onChange={(e) => setPrefs((p) => ({ ...p, mainOrAvoid: e.target.value }))}
-                />
+                <label className="form-label">Estilo</label>
+                <div className="type-selector">
+                  {chip(prefs.light, '🥗 Ligero (pocas calorías y grasa)', () => set({ light: !prefs.light }))}
+                  {chip(prefs.fewIngredients, '🧺 Pocos ingredientes (≤ 6)', () => set({ fewIngredients: !prefs.fewIngredients }))}
+                </div>
+              </div>
+
+              <div className="form-field">
+                <label className="form-label">Tipo de plato</label>
+                <div className="type-selector">
+                  {FOOD_TYPES.filter((f) => f.key !== 'Comer fuera').map((ft) => chip(prefs.types.includes(ft.label), `${ft.emoji} ${ft.label}`, () => toggleType(ft.label)))}
+                </div>
+              </div>
+
+              <div className="form-field">
+                <label className="form-label">Ingredientes que quiero aprovechar</label>
+                <div className="type-selector" style={{ marginBottom: 6 }}>
+                  {availableIds.length > 0 && chip(false, `🧊 Usar mi despensa (${availableIds.length})`, () => set({ available: availableIds }))}
+                  {chip(showIngredients, `Elegir ingredientes${prefs.available.length ? ` (${prefs.available.length})` : ''}`, () => setShowIngredients((v) => !v))}
+                  {prefs.available.length > 0 && chip(false, 'Quitar todos', () => set({ available: [] }))}
+                </div>
+                {showIngredients && (
+                  <IngredientPicker
+                    ingredients={ingredients}
+                    selectedIds={prefs.available}
+                    onChange={(u) => setPrefs((p) => ({ ...p, available: typeof u === 'function' ? u(p.available) : u }))}
+                    onIngredientAdded={() => {}}
+                    onError={setError}
+                  />
+                )}
+              </div>
+
+              <div className="form-field">
+                <label className="form-label">Evitar</label>
+                <input className="form-input" placeholder="Ej: fritos, marisco, picante…" value={prefs.avoid} onChange={(e) => set({ avoid: e.target.value })} />
               </div>
               <div className="form-field">
                 <label className="form-label">Otras notas</label>
-                <input
-                  className="form-input"
-                  placeholder="Ej: ligero, casero…"
-                  value={prefs.notes}
-                  onChange={(e) => setPrefs((p) => ({ ...p, notes: e.target.value }))}
-                />
+                <input className="form-input" placeholder="Ej: que sobre para el tupper…" value={prefs.notes} onChange={(e) => set({ notes: e.target.value })} />
               </div>
               {error && <div style={{ color: '#dc2626', fontSize: 12 }}>{error}</div>}
             </>
@@ -2273,13 +2367,29 @@ function AIRecipeProposalsModal({ savedRecipes, onClose, onAdd }) {
                   {proposals.map((p, i) => (
                     <div key={i} className="proposal-item">
                       <div className="proposal-name">{titleCase(p.name)}</div>
+                      <div className="proposal-badges">
+                        {p.time_min != null && <span className="auto-sheet-type">⏱ {p.time_min} min</span>}
+                        {p.light && <span className="auto-sheet-type">{LIGHT_LABELS[p.light]}</span>}
+                        {p.type && <span className="auto-sheet-type" style={{ background: CATEGORY_PASTELS[p.type] }}>{FOOD_TYPES.find((f) => f.key === p.type)?.label || p.type}</span>}
+                        {p.ingredients.length > 0 && <span className="auto-sheet-type">{p.ingredients.length} ingredientes</span>}
+                      </div>
                       <div className="proposal-desc">{p.description}</div>
+                      {open === i && (
+                        <div className="proposal-detail">
+                          {p.ingredients.length > 0 && (
+                            <div className="auto-sheet-chips" style={{ marginBottom: 6 }}>
+                              {p.ingredients.map((ing, k) => <span key={k} className="auto-sheet-chip">{titleCase(ing.name)}</span>)}
+                            </div>
+                          )}
+                          {p.steps && <p className="auto-sheet-text">{p.steps}</p>}
+                        </div>
+                      )}
                       <div className="proposal-actions">
-                        <button className="btn btn-ghost" type="button" onClick={() => viewRecipe(p.name)}>
-                          Ver receta
+                        <button className="btn btn-ghost" type="button" onClick={() => setOpen(open === i ? null : i)}>
+                          {open === i ? 'Ocultar' : 'Ver receta'}
                         </button>
-                        <button className="btn btn-primary" type="button" onClick={() => onAdd(p.name)}>
-                          <Plus size={12} /> Añadir
+                        <button className="btn btn-primary" type="button" disabled={added.has(i)} onClick={() => addOne(p, i)}>
+                          {added.has(i) ? '✓ Añadida' : <><Plus size={12} /> Añadir a recetas</>}
                         </button>
                       </div>
                     </div>
@@ -2292,42 +2402,20 @@ function AIRecipeProposalsModal({ savedRecipes, onClose, onAdd }) {
         </div>
         <div className="modal-footer">
           {step === 'list' && !loading && (
-            <button className="btn btn-ghost" onClick={() => setStep('form')}>Volver</button>
+            <>
+              <button className="btn btn-ghost" onClick={() => { setStep('form'); setError(null) }}>Volver</button>
+              {proposals.length > 1 && (
+                <button className="btn btn-ghost" onClick={addAll} disabled={added.size === proposals.length}>Añadir todas</button>
+              )}
+            </>
           )}
           {step === 'form' && (
             <button className="btn btn-primary" onClick={handleGenerate} disabled={loading}>
-              {loading ? 'Generando…' : 'Generar propuestas'}
+              {loading ? 'Generando…' : `Generar ${prefs.count} propuesta${prefs.count !== 1 ? 's' : ''}`}
             </button>
           )}
         </div>
       </div>
-
-      {recipeView && (
-        <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && setRecipeView(null)} style={{ zIndex: 250 }}>
-          <div className="modal">
-            <div className="modal-header">
-              <h3>🍳 {titleCase(recipeView.name)}</h3>
-              <button className="modal-close" onClick={() => setRecipeView(null)}><X size={18} /></button>
-            </div>
-            <div className="modal-body">
-              {recipeView.loading ? (
-                <div className="ai-loading"><div className="spinner" />Cargando receta…</div>
-              ) : recipeView.error ? (
-                <p style={{ color: 'var(--red)', fontSize: 13 }}>{recipeView.error}</p>
-              ) : (
-                <div className="recipe-content">
-                  {recipeView.body.split('\n').filter(Boolean).map((line, i) => (
-                    <p key={i} style={{ marginBottom: 8, lineHeight: 1.6 }}>{line}</p>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-ghost" onClick={() => setRecipeView(null)}>Cerrar</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
@@ -2523,6 +2611,7 @@ export default function App() {
   const [selectedTag, setSelectedTag] = useState(null)
   const [autoMenuOpen, setAutoMenuOpen] = useState(false)
   const [recipeReverse, setRecipeReverse] = useState(false)
+  const [recipeFilters, setRecipeFilters] = useState({ maxTime: null, light: false, few: false, types: [] })
   const [dishIngMap, setDishIngMap] = useState({})
   const [recipeDetailId, setRecipeDetailId] = useState(null)
   const [cartRecipeId, setCartRecipeId] = useState(null)
@@ -2867,7 +2956,7 @@ export default function App() {
 
   // Guarda tipo y pasos en la receta, y sus ingredientes en el plato con el mismo nombre
   // (la misma tabla que usa el menú, así los ingredientes se reutilizan al añadirla al tablero).
-  async function handleSaveRecipeDetail({ recipe, effort, ingredientIds, type, steps }) {
+  async function handleSaveRecipeDetail({ recipe, effort, ingredientIds, type, steps, timeMin, light }) {
     const name = recipe.name.trim()
     const existing = await dbGet('v2_dishes', { name })
     const dish = existing[0] || await dbInsert('v2_dishes', { name, effort_default: effort })
@@ -2882,10 +2971,56 @@ export default function App() {
         await dbInsert('v2_dish_ingredients', { dish_id: dish.id, ingredient_id: ingId, effort_level: effort })
       }
     }
-    await updateRecipe(recipe.id, { type: type || null, steps: steps.trim() || null })
+    await updateRecipe(recipe.id, { type: type || null, steps: steps.trim() || null, time_min: timeMin || null, light: light || null })
     await loadDishIngMap()
     loadSlots()
     showToast('Receta guardada ✓')
+  }
+
+  // Convierte una propuesta de la IA en una receta completa: casa (o crea) sus ingredientes,
+  // los guarda en el plato y rellena tipo, tiempo, ligereza y pasos.
+  async function handleAddProposal(p) {
+    const name = p.name.trim()
+    const key = name.toLowerCase()
+    let catalog = [...ingredients]
+    const ids = []
+    for (const ing of p.ingredients) {
+      const n = normalizeText(ing.name).trim()
+      let match = catalog.find((i) => normalizeText(i.name).trim() === n)
+        || catalog.find((i) => normalizeText(i.name).startsWith(n + ' ') || normalizeText(i.name).startsWith(n + ' ('))
+      if (!match) {
+        const label = ing.name.trim().charAt(0).toUpperCase() + ing.name.trim().slice(1)
+        match = await dbInsert('v2_ingredients', { name: label, category: ing.category || 'Otros', is_custom: true })
+        handleIngredientAdded(match)
+        catalog = [...catalog, match]
+      }
+      if (!ids.includes(match.id)) ids.push(match.id)
+    }
+
+    const existingDishes = await dbGet('v2_dishes', { name })
+    const dish = existingDishes[0] || await dbInsert('v2_dishes', { name, effort_default: 1 })
+    const have = new Set((await dbGet('v2_dish_ingredients', { dish_id: dish.id, effort_level: 1 })).map((d) => d.ingredient_id))
+    for (const id of ids) {
+      if (!have.has(id)) await dbInsert('v2_dish_ingredients', { dish_id: dish.id, ingredient_id: id, effort_level: 1 })
+    }
+
+    const fields = {
+      description: p.description || null,
+      steps: p.steps || null,
+      type: p.type || null,
+      time_min: p.time_min || null,
+      light: p.light || null,
+    }
+    const existing = savedRecipes.find((r) => (r.name || '').trim().toLowerCase() === key)
+    if (existing) {
+      await updateRecipe(existing.id, fields)
+    } else {
+      const row = { id: Date.now().toString() + Math.floor(Math.random() * 100), name, ...fields }
+      setSavedRecipes((prev) => [...prev, row])
+      await dbInsert('v2_saved_recipes', row)
+    }
+    await loadDishIngMap()
+    showToast(`"${titleCase(name)}" añadida a recetas`)
   }
 
   function handleRecipeToCart(selected, recipeName) {
@@ -3170,6 +3305,18 @@ export default function App() {
     if (selectedTag) {
       result = result.filter((r) => (r.tags || []).includes(selectedTag))
     }
+    const rf = recipeFilters
+    if (rf.maxTime) result = result.filter((r) => r.time_min && r.time_min <= rf.maxTime)
+    if (rf.light) result = result.filter((r) => r.light === 'ligero')
+    if (rf.few) {
+      result = result.filter((r) => {
+        const n = savedIngredientIds(dishIngMap, r.name).length
+        return n >= 1 && n <= 6
+      })
+    }
+    if (rf.types.length) {
+      result = result.filter((r) => rf.types.includes(r.type || getDominantCategory(savedIngredientIds(dishIngMap, r.name), ingredients, r.name)))
+    }
     if (recipeSearch.trim()) {
       const q = recipeSearch.toLowerCase()
       result = result.filter((r) => r.name.toLowerCase().includes(q))
@@ -3191,7 +3338,7 @@ export default function App() {
       result = [...result].sort((a, b) => stamp(b) - stamp(a))
     }
     return recipeReverse ? [...result].reverse() : result
-  }, [savedRecipes, recipeSearch, recipeSort, recipeReverse, ingredients, selectedTag])
+  }, [savedRecipes, recipeSearch, recipeSort, recipeReverse, ingredients, selectedTag, recipeFilters, dishIngMap])
 
   if (!authReady) return null
   if (!currentUser) return <LoginScreen />
@@ -3465,6 +3612,23 @@ export default function App() {
                         ))}
                       </div>
                     )}
+                    <div className="tag-filter-chips">
+                      {[[15, '⚡ ≤15 min'], [30, '≤30 min']].map(([n, label]) => (
+                        <button key={n} className={`tag-filter-chip${recipeFilters.maxTime === n ? ' active' : ''}`} onClick={() => setRecipeFilters((f) => ({ ...f, maxTime: f.maxTime === n ? null : n }))}>{label}</button>
+                      ))}
+                      <button className={`tag-filter-chip${recipeFilters.light ? ' active' : ''}`} onClick={() => setRecipeFilters((f) => ({ ...f, light: !f.light }))}>🥗 Ligero</button>
+                      <button className={`tag-filter-chip${recipeFilters.few ? ' active' : ''}`} onClick={() => setRecipeFilters((f) => ({ ...f, few: !f.few }))}>🧺 Pocos ingr.</button>
+                      {FOOD_TYPES.filter((ft) => ft.key !== 'Comer fuera').map((ft) => (
+                        <button
+                          key={ft.key}
+                          className={`tag-filter-chip${recipeFilters.types.includes(ft.key) ? ' active' : ''}`}
+                          onClick={() => setRecipeFilters((f) => ({ ...f, types: f.types.includes(ft.key) ? f.types.filter((t) => t !== ft.key) : [...f.types, ft.key] }))}
+                        >{ft.emoji} {ft.label}</button>
+                      ))}
+                      {(recipeFilters.maxTime || recipeFilters.light || recipeFilters.few || recipeFilters.types.length > 0) && (
+                        <button className="tag-filter-chip" onClick={() => setRecipeFilters({ maxTime: null, light: false, few: false, types: [] })}>✕ Limpiar</button>
+                      )}
+                    </div>
                     <input
                       className="recipe-search-input"
                       placeholder="Buscar receta…"
@@ -3713,8 +3877,10 @@ export default function App() {
       {aiProposalsOpen && (
         <AIRecipeProposalsModal
           savedRecipes={savedRecipes}
+          ingredients={ingredients}
+          availableIds={pantryIngredients.map((p) => p.ingredient_id).filter(Boolean)}
           onClose={() => setAiProposalsOpen(false)}
-          onAdd={(name) => { addToSavedRecipes(name); showToast(`"${titleCase(name)}" añadida a recetas`) }}
+          onAdd={handleAddProposal}
         />
       )}
 

@@ -2441,3 +2441,8 @@ html, body {
 .pantry-chip-note { font-size: 11px; color: var(--text-muted); }
 .pantry-chip-x { background: rgba(0,0,0,0.08); border: none; border-radius: 50%; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-muted); }
 .pantry-chip-x:hover { background: var(--red-light); color: var(--red); }
+
+/* ── Propuestas IA ───────────────────────────────────────────────────────── */
+.proposal-badges { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 4px; }
+.proposal-detail { margin: 6px 0; padding: 8px 10px; background: var(--surface2); border-radius: 8px; }
+.recipe-meta { font-size: 10px; font-weight: 700; margin-left: 4px; color: var(--postit-text); opacity: 0.8; }
