@@ -2156,7 +2156,7 @@ function LoginScreen() {
   return (
     <div className="login-screen">
       <form className="login-form" onSubmit={handleSubmit}>
-        <h1>🗒️ Pizarra Semanal</h1>
+        <h1><img src="/icons/logo.png" alt="" className="app-logo" /> Pizarra Semanal</h1>
         <p className="login-sub">Inicia sesión para gestionar tu pizarra</p>
         <input
           type="text"
@@ -3355,7 +3355,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>🗒️ Pizarra Semanal</h1>
+        <h1><img src="/icons/logo.png" alt="" className="app-logo" /> Pizarra Semanal</h1>
         <div className="week-nav">
           <button onClick={() => setWeekOffset((w) => w - 1)} title="7 días atrás">
             <ChevronLeft size={16} />

@@ -2446,3 +2446,6 @@ html, body {
 .proposal-badges { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 4px; }
 .proposal-detail { margin: 6px 0; padding: 8px 10px; background: var(--surface2); border-radius: 8px; }
 .recipe-meta { font-size: 10px; font-weight: 700; margin-left: 4px; color: var(--postit-text); opacity: 0.8; }
+
+/* Logo de la app */
+.app-logo { height: 1.3em; width: auto; vertical-align: -0.28em; margin-right: 2px; }
