@@ -1263,6 +1263,10 @@ function RecipeDetailModal({ recipe, ingredients, dishIngMap, onClose, onSave, o
             />
           </div>
 
+          {recipe.source_url && /^https?:\/\//i.test(recipe.source_url) && (
+            <p className="import-note">Origen: <a href={recipe.source_url} target="_blank" rel="noreferrer noopener">{recipe.source_url.replace(/^https?:\/\/(www\.)?/, '').slice(0, 60)}</a></p>
+          )}
+
           {error && <div style={{ color: '#dc2626', fontSize: 12 }}>{error}</div>}
         </div>
         <div className="modal-footer">
@@ -2573,6 +2577,297 @@ function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClo
   )
 }
 
+// ─── Importar una receta desde un enlace ──────────────────────────────────────
+
+const URL_IN_TEXT = /https?:\/\/[^\s<>"')\]]+/i
+// Del texto/título/enlace que manda el menú "Compartir" del móvil se saca el enlace y lo que haya además
+function parseSharedPayload({ title = '', text = '', url = '' }) {
+  const link = [url, text, title].map((v) => (v || '').match(URL_IN_TEXT)?.[0]).find(Boolean)
+  if (!link) return null
+  const rest = [title, text].join(' ').replace(new RegExp(URL_IN_TEXT.source, 'gi'), ' ').replace(/\s+/g, ' ').trim()
+  return { url: link.replace(/[.,;:!?]+$/, ''), text: rest.length >= 30 ? rest : '' }
+}
+
+function ImportProgress({ onCancel }) {
+  const [secs, setSecs] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setSecs((n) => n + 1), 1000)
+    return () => clearInterval(id)
+  }, [])
+  const phases = [
+    'Abriendo el enlace…',
+    'Leyendo la descripción y los datos de la página…',
+    'Analizando el vídeo si se puede ver…',
+    'Escribiendo la receta: título, ingredientes y pasos…',
+    'Casi listo, tarda un poco más de lo normal…',
+  ]
+  return (
+    <div className="proposal-progress" role="status" aria-live="polite">
+      <div className="proposal-progress-head">
+        <div className="spinner" />
+        <div>
+          <strong>{phases[Math.min(phases.length - 1, Math.floor(secs / 5))]}</strong>
+          <div className="proposal-progress-sub">{secs} s transcurridos</div>
+        </div>
+      </div>
+      <div className="proposal-progress-bar"><div /></div>
+      <button className="btn btn-ghost" type="button" onClick={onCancel}>Cancelar</button>
+    </div>
+  )
+}
+
+function ImportRecipeModal({ initial, onClose, onAdd, onPlan, hidden = false, tabs = null }) {
+  const [url, setUrl] = useState('')
+  const [text, setText] = useState('')
+  const [phase, setPhase] = useState('form') // 'form' | 'loading' | 'result'
+  const [msg, setMsg] = useState(null)       // { kind: 'needText' | 'notRecipe' | 'error', text }
+  const [result, setResult] = useState(null)
+  const [draft, setDraft] = useState(null)
+  const [tagsText, setTagsText] = useState('')
+  const [added, setAdded] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const reqRef = useRef(0)
+  const textRef = useRef(null)
+  const lastInitial = useRef(null)
+
+  async function analyze(u = url, t = text) {
+    if (!u.trim() && t.trim().length < 30) { setMsg({ kind: 'error', text: 'Pega un enlace o el texto de la receta.' }); return }
+    const myReq = ++reqRef.current
+    setPhase('loading')
+    setMsg(null)
+    setResult(null)
+    setAdded(false)
+    try {
+      const data = await callAI('import_recipe', { url: u.trim(), text: t.trim() })
+      if (reqRef.current !== myReq) return
+      if (data.ok) {
+        setResult(data)
+        setDraft({ ...data.recipe, ingredients: data.recipe.ingredients.map((i) => ({ ...i })) })
+        setTagsText((data.recipe.tags || []).join(', '))
+        setPhase('result')
+      } else {
+        setMsg({ kind: data.needText ? 'needText' : 'notRecipe', text: data.message })
+        setPhase('form')
+        if (data.needText) setTimeout(() => textRef.current?.focus(), 60)
+      }
+    } catch (e) {
+      if (reqRef.current !== myReq) return
+      setMsg({ kind: 'error', text: e.message })
+      setPhase('form')
+    }
+  }
+
+  // Un enlace compartido desde otra app (Instagram, etc.) se rellena y se analiza solo
+  useEffect(() => {
+    if (!initial?.nonce || lastInitial.current === initial.nonce) return
+    lastInitial.current = initial.nonce
+    setUrl(initial.url || '')
+    setText(initial.text || '')
+    analyze(initial.url || '', initial.text || '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initial?.nonce])
+
+  function cancel() {
+    reqRef.current += 1
+    setPhase('form')
+  }
+
+  function reset() {
+    reqRef.current += 1
+    setUrl('')
+    setText('')
+    setMsg(null)
+    setResult(null)
+    setDraft(null)
+    setAdded(false)
+    setPhase('form')
+  }
+
+  const setField = (patch) => setDraft((d) => ({ ...d, ...patch }))
+  const removeIngredient = (idx) => setDraft((d) => ({ ...d, ingredients: d.ingredients.filter((_, i) => i !== idx) }))
+
+  async function add() {
+    if (!draft?.name?.trim() || saving) return
+    setSaving(true)
+    try {
+      // Las cantidades se guardan al principio de los pasos (las recetas guardan ingredientes, no cantidades)
+      const withQty = draft.ingredients.filter((i) => i.quantity)
+      const qtyLine = withQty.length ? `Cantidades: ${withQty.map((i) => `${i.quantity} ${i.name}`.trim()).join(' · ')}` : ''
+      const steps = [qtyLine, (draft.steps || '').trim()].filter(Boolean).join('\n\n')
+      await onAdd({
+        ...draft,
+        steps,
+        tags: tagsText.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean).slice(0, 6),
+        time_min: Number(draft.time_min) > 0 ? Math.round(Number(draft.time_min)) : null,
+      })
+      setAdded(true)
+    } catch (e) {
+      setMsg({ kind: 'error', text: 'No se pudo añadir: ' + e.message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const sources = result ? [
+    result.analyzed.user_text && 'tu texto',
+    result.analyzed.text && 'la descripción de la publicación',
+    result.analyzed.structured && 'los datos de la receta de la página',
+    result.analyzed.video && 'el vídeo',
+    result.analyzed.youtube && 'el vídeo de YouTube',
+  ].filter(Boolean) : []
+  const noVideo = result && !result.analyzed.video && !result.analyzed.youtube
+
+  return (
+    <div className="modal-backdrop" style={hidden ? { display: 'none' } : undefined} onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="modal-header">
+          {tabs || <h3>🔗 Importar receta</h3>}
+          <button className="modal-close" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body">
+          {phase === 'form' && (
+            <>
+              <p className="import-lead">
+                Pega el enlace de una receta (Instagram, YouTube, un blog…) y la app lee la publicación y la convierte en receta con título, ingredientes y pasos.
+              </p>
+              <div className="form-field">
+                <label className="form-label" htmlFor="import-url">Enlace</label>
+                <input
+                  id="import-url"
+                  className="form-input"
+                  type="url"
+                  inputMode="url"
+                  placeholder="https://www.instagram.com/reel/…"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') analyze() }}
+                  autoFocus
+                />
+              </div>
+              <div className="form-field">
+                <label className="form-label" htmlFor="import-text">
+                  Descripción de la publicación {msg?.kind === 'needText' ? '(necesaria)' : '(opcional, mejora el resultado)'}
+                </label>
+                <textarea
+                  id="import-text"
+                  ref={textRef}
+                  className={`recipe-steps-input${msg?.kind === 'needText' ? ' needs-attention' : ''}`}
+                  rows={5}
+                  placeholder="Copia aquí el texto de la publicación: ingredientes, pasos…"
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                />
+              </div>
+              {msg && <div className={`import-msg import-msg-${msg.kind}`}>{msg.text}</div>}
+              <p className="import-note">
+                En Instagram no siempre se puede leer la publicación sin iniciar sesión; en ese caso pega la descripción. Los datos del vídeo solo se usan si la publicación los deja ver públicamente.
+              </p>
+            </>
+          )}
+
+          {phase === 'loading' && <ImportProgress onCancel={cancel} />}
+
+          {phase === 'result' && draft && (
+            <>
+              <div className="import-sources">
+                <strong>Analizado:</strong> {sources.length ? sources.join(' · ') : 'el enlace'}
+                {noVideo && <span className="import-sub">El vídeo no se pudo ver: la receta sale del texto.</span>}
+                {result.recipe.inferred?.length > 0 && (
+                  <span className="import-sub import-warn">La IA ha estimado: {result.recipe.inferred.join(', ')}. Revísalo antes de guardar.</span>
+                )}
+              </div>
+
+              <div className="form-field">
+                <label className="form-label" htmlFor="imp-name">Nombre</label>
+                <input id="imp-name" className="form-input" value={draft.name} onChange={(e) => setField({ name: e.target.value })} />
+              </div>
+
+              <div className="import-row">
+                <div className="form-field" style={{ flex: '0 0 110px' }}>
+                  <label className="form-label" htmlFor="imp-time">Minutos</label>
+                  <input id="imp-time" className="form-input" type="number" min="1" value={draft.time_min ?? ''} onChange={(e) => setField({ time_min: e.target.value })} />
+                </div>
+                <div className="form-field" style={{ flex: 1 }}>
+                  <label className="form-label">Ligereza</label>
+                  <div className="type-selector">
+                    {[['ligero', 'Ligero'], ['equilibrado', 'Equilibrado'], ['contundente', 'Contundente']].map(([k, l]) => (
+                      <button key={k} type="button" className={`type-btn${draft.light === k ? ' selected' : ''}`} onClick={() => setField({ light: draft.light === k ? null : k })}>{l}</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="form-field">
+                <label className="form-label">Tipo de plato</label>
+                <div className="type-selector">
+                  {FOOD_TYPES.map((ft) => (
+                    <button key={ft.key} type="button" className={`type-btn${draft.type === ft.key ? ' selected' : ''}`} onClick={() => setField({ type: draft.type === ft.key ? null : ft.key })}>
+                      {ft.emoji} {ft.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="form-field">
+                <label className="form-label">Ingredientes ({draft.ingredients.length})</label>
+                <div className="import-ings">
+                  {draft.ingredients.map((ing, idx) => (
+                    <span key={idx} className="import-ing">
+                      {ing.quantity && <b>{ing.quantity}</b>} {titleCase(ing.name)}
+                      <button type="button" aria-label={`Quitar ${ing.name}`} onClick={() => removeIngredient(idx)}>×</button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="form-field">
+                <label className="form-label" htmlFor="imp-steps">Pasos</label>
+                <textarea id="imp-steps" className="recipe-steps-input" rows={6} value={draft.steps} onChange={(e) => setField({ steps: e.target.value })} />
+              </div>
+
+              <div className="form-field">
+                <label className="form-label" htmlFor="imp-tags">Etiquetas (separadas por comas)</label>
+                <input id="imp-tags" className="form-input" value={tagsText} onChange={(e) => setTagsText(e.target.value)} />
+              </div>
+
+              {draft.source_url && (
+                <p className="import-note">Origen: <a href={/^https?:\/\//i.test(draft.source_url) ? draft.source_url : '#'} target="_blank" rel="noreferrer noopener">{draft.source_url.replace(/^https?:\/\/(www\.)?/, '').slice(0, 60)}</a></p>
+              )}
+              {msg && <div className={`import-msg import-msg-${msg.kind}`}>{msg.text}</div>}
+              {added && (
+                <div className="proposal-next">
+                  ✓ "{titleCase(draft.name)}" ya está en tus recetas. ¿La colocamos en el menú?
+                  <button className="btn btn-primary" type="button" onClick={() => onPlan?.(draft.name.trim())}>
+                    <CalendarPlus size={13} /> Añadir al menú
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+        <div className="modal-footer">
+          {phase === 'form' && (
+            <button className="btn btn-primary" onClick={() => analyze()} disabled={!url.trim() && text.trim().length < 30}>
+              <Sparkles size={14} /> Analizar
+            </button>
+          )}
+          {phase === 'result' && (
+            <>
+              <button className="btn btn-ghost" onClick={reset}>Importar otra</button>
+              {!added && (
+                <button className="btn btn-primary" onClick={add} disabled={saving || !draft?.name?.trim()}>
+                  {saving ? 'Guardando…' : <><Plus size={13} /> Añadir a recetas</>}
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
 // ─── Asistente (menú de la semana + ideas de recetas) ─────────────────────────
 
 function AssistantTabs({ active, onChange }) {
@@ -2583,6 +2878,9 @@ function AssistantTabs({ active, onChange }) {
       </button>
       <button role="tab" aria-selected={active === 'ideas'} className={active === 'ideas' ? 'active' : ''} onClick={() => onChange('ideas')}>
         💡 Ideas de recetas
+      </button>
+      <button role="tab" aria-selected={active === 'import'} className={active === 'import' ? 'active' : ''} onClick={() => onChange('import')}>
+        🔗 Importar
       </button>
     </div>
   )
@@ -2868,7 +3166,8 @@ export default function App() {
   const [recipeSearch, setRecipeSearch] = useState('')
   const [recipeSort, setRecipeSort] = useState(() => { try { return localStorage.getItem('recipeSort') || 'recent' } catch { return 'recent' } })
   const [selectedTag, setSelectedTag] = useState(null)
-  const [assistant, setAssistant] = useState(null) // null | 'menu' | 'ideas'
+  const [assistant, setAssistant] = useState(null) // null | 'menu' | 'ideas' | 'import'
+  const [importInitial, setImportInitial] = useState(null) // { url, text, nonce } de un enlace compartido
   const [recipeReverse, setRecipeReverse] = useState(() => { try { return localStorage.getItem('recipeReverse') === '1' } catch { return false } })
   useEffect(() => { try { localStorage.setItem('recipeSort', recipeSort); localStorage.setItem('recipeReverse', recipeReverse ? '1' : '0') } catch {} }, [recipeSort, recipeReverse])
   const [recipeFilters, setRecipeFilters] = useState({ maxTime: null, light: false, few: false, types: [] })
@@ -3292,6 +3591,7 @@ export default function App() {
       type: p.type || null,
       time_min: p.time_min || null,
       light: p.light || null,
+      ...(p.source_url ? { source_url: p.source_url } : {}),
     }
     const newTags = (p.tags || []).map((t) => String(t).trim().toLowerCase()).filter(Boolean)
     const existing = savedRecipes.find((r) => (r.name || '').trim().toLowerCase() === key)
@@ -3657,6 +3957,22 @@ export default function App() {
     }
     return recipeReverse ? [...result].reverse() : result
   }, [savedRecipes, recipeSearch, recipeSort, recipeReverse, ingredients, selectedTag, recipeFilters, dishIngMap])
+
+  // Enlace compartido desde otra app (Instagram, navegador…): se abre Asistente → Importar con él relleno.
+  // Si aún no hay sesión se guarda y se retoma al entrar.
+  useEffect(() => {
+    if (!authReady || !currentUser) return
+    let shared = null
+    try {
+      const q = new URLSearchParams(window.location.search)
+      if (q.has('share')) {
+        const title = q.get('title') || '', text = q.get('text') || '', url = q.get('url') || ''
+        shared = parseSharedPayload({ title, text, url }) || { url: '', text: `${title} ${text}`.trim() }
+        window.history.replaceState(null, '', window.location.pathname)
+      }
+    } catch {}
+    if (shared) { setImportInitial({ ...shared, nonce: Date.now() }); setAssistant('import') }
+  }, [authReady, currentUser])
 
   if (!authReady) return null
   if (!currentUser) return <LoginScreen />
@@ -4366,6 +4682,17 @@ export default function App() {
           onAdd={handleAddProposal}
           onPlan={(name) => setPlanPicker({ mode: 'recipeDirect', name })}
           onGoMenu={() => setAssistant('menu')}
+        />
+      )}
+
+      {assistant && (
+        <ImportRecipeModal
+          hidden={assistant !== 'import'}
+          tabs={<AssistantTabs active={assistant} onChange={setAssistant} />}
+          initial={importInitial}
+          onClose={() => setAssistant(null)}
+          onAdd={handleAddProposal}
+          onPlan={(name) => setPlanPicker({ mode: 'recipeDirect', name })}
         />
       )}
 

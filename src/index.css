@@ -2833,3 +2833,19 @@ html, body {
 }
 .side-body > .sidebar .sidebar-header h2 { display: none; }
 .side-body > .sidebar .sidebar-header { justify-content: flex-end; }
+
+/* ── Importar receta desde un enlace ─────────────────────────────────────── */
+.import-lead { margin: 0 0 12px; font-size: 13px; color: var(--text-muted); line-height: 1.45; }
+.import-note { margin: 8px 0 0; font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+.import-note a { color: var(--accent); }
+.import-msg { padding: 9px 12px; border-radius: var(--radius); font-size: 13px; line-height: 1.4; background: var(--surface2); }
+.import-msg-needText { background: #fef3c7; color: #78350f; }
+.import-msg-notRecipe, .import-msg-error { background: #fee2e2; color: #7f1d1d; }
+.needs-attention { border-color: #f59e0b !important; box-shadow: 0 0 0 3px rgba(245, 158, 11, .2); }
+.import-sources { display: flex; flex-direction: column; gap: 4px; padding: 9px 12px; border-radius: var(--radius); background: var(--green-light); font-size: 13px; margin-bottom: 4px; }
+.import-sub { font-size: 12px; color: var(--text-muted); }
+.import-warn { color: #92400e; }
+.import-row { display: flex; gap: 12px; flex-wrap: wrap; }
+.import-ings { display: flex; flex-wrap: wrap; gap: 6px; }
+.import-ing { display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px 4px 10px; border-radius: var(--radius-pill); background: var(--surface2); border: 1.5px solid var(--border); font-size: 12px; }
+.import-ing button { border: none; background: transparent; cursor: pointer; color: var(--text-muted); font-size: 15px; line-height: 1; padding: 0 4px; }
