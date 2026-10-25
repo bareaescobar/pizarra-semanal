@@ -2237,3 +2237,212 @@ html, body {
   text-align: center;
   padding: 16px 0;
 }
+
+/* ── Recipe detail, ingredients and cart ─────────────────────────────────── */
+
+.recipe-sort-dir { flex: 0 0 auto; min-width: 28px; font-size: 13px; line-height: 1; }
+
+.recipe-footer-btns { display: flex; align-items: center; gap: 2px; }
+.recipe-cart-btn { display: inline-flex; align-items: center; gap: 2px; font-size: 9px; font-weight: 800; }
+
+.type-selector { display: flex; flex-wrap: wrap; gap: 6px; }
+.type-btn {
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: inherit;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface2);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.13s;
+}
+.type-btn:hover:not(.selected) { border-color: var(--accent); color: var(--accent); }
+.type-btn.selected { color: var(--text); border-color: var(--accent); background: var(--accent-light); }
+
+.recipe-steps-input {
+  width: 100%;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface2);
+  color: var(--text);
+  resize: vertical;
+  outline: none;
+}
+.recipe-steps-input:focus { border-color: var(--accent); }
+
+.saved-ingredients-hint {
+  font-size: 12px;
+  color: var(--green);
+  background: var(--green-light);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.cart-ingredient-list { display: flex; flex-direction: column; gap: 2px; max-height: 50vh; overflow-y: auto; }
+.cart-ingredient {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.cart-ingredient:hover { background: var(--surface3); }
+.cart-ingredient-cat { margin-left: auto; font-size: 11px; color: var(--text-muted); }
+
+/* ── Auto menu v2: ajustes, selección y hoja de receta ───────────────────── */
+
+.auto-menu-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.auto-menu-opts-btn {
+  font-family: inherit; font-size: 12px; font-weight: 700; padding: 5px 10px;
+  border: 1.5px solid var(--border); border-radius: var(--radius-pill);
+  background: var(--surface2); color: var(--text-muted); cursor: pointer;
+}
+.auto-menu-opts-btn.active, .auto-menu-opts-btn:hover { border-color: var(--accent); color: var(--accent); }
+.auto-menu-count { font-size: 11px; color: var(--text-muted); }
+.auto-menu-link {
+  background: none; border: none; font-family: inherit; font-size: 12px; font-weight: 700;
+  color: var(--accent); cursor: pointer; padding: 2px 4px;
+}
+.auto-menu-link:hover { text-decoration: underline; }
+
+.auto-menu-opts {
+  display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; margin-bottom: 10px;
+  background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.auto-opt-group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.auto-opt-title { font-size: 11px; font-weight: 800; text-transform: uppercase; color: var(--text-muted); min-width: 76px; }
+.auto-opt-check { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer; }
+.auto-opt-select {
+  font-family: inherit; font-size: 12px; padding: 3px 6px; border: 1.5px solid var(--border);
+  border-radius: 8px; background: var(--surface); color: var(--text);
+}
+.auto-day-chip {
+  font-family: inherit; font-size: 11px; font-weight: 700; padding: 3px 8px; cursor: pointer;
+  border: 1.5px solid var(--border); border-radius: var(--radius-pill);
+  background: var(--surface); color: var(--text-muted);
+}
+.auto-day-chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.auto-menu-cell { position: relative; cursor: pointer; flex-direction: column; gap: 2px; transition: transform 0.1s, box-shadow 0.1s; }
+.auto-menu-cell:hover { transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+.auto-menu-cell.empty { cursor: default; color: var(--text-muted); opacity: 0.5; border: 1.5px dashed var(--border); }
+.auto-menu-cell.empty:hover { transform: none; box-shadow: none; }
+.auto-menu-cell.proposed:not(.chosen) { opacity: 0.8; border-style: dashed; }
+.auto-menu-cell.chosen { border: 2px solid var(--accent); opacity: 1; }
+.auto-menu-cell.open { outline: 2px solid var(--accent-glow); }
+.auto-cell-check { position: absolute; top: 3px; left: 3px; width: 13px; height: 13px; cursor: pointer; accent-color: var(--accent); }
+
+.auto-sheet {
+  margin-top: 12px; padding: 12px 14px; border: 1.5px solid var(--accent);
+  border-radius: var(--radius); background: var(--surface); display: flex; flex-direction: column; gap: 8px;
+}
+.auto-sheet-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; }
+.auto-sheet-type { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: var(--radius-pill); background: var(--surface3); }
+.auto-sheet-stars { color: #f59e0b; font-size: 13px; letter-spacing: 1px; }
+.auto-sheet-section { display: flex; flex-direction: column; gap: 3px; }
+.auto-sheet-label { font-size: 11px; font-weight: 800; text-transform: uppercase; color: var(--text-muted); }
+.auto-sheet-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.auto-sheet-chip { font-size: 12px; padding: 2px 8px; border-radius: var(--radius-pill); background: var(--surface3); }
+.auto-sheet-text { font-size: 13px; line-height: 1.5; white-space: pre-wrap; margin: 0; }
+.auto-sheet-muted { font-size: 12px; color: var(--text-muted); margin: 0; }
+.auto-sheet-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.auto-swap { display: flex; flex-direction: column; gap: 6px; }
+.auto-swap-list { display: flex; flex-direction: column; max-height: 180px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+
+/* El cuerpo del modal es una columna flex: sin esto la cuadrícula se comprime y corta la fila de cena */
+.auto-menu-grid, .auto-menu-opts, .auto-menu-toolbar, .auto-sheet, .auto-menu-note { flex-shrink: 0; }
+.auto-menu-grid { overflow-x: auto; overflow-y: visible; padding: 4px 2px; }
+
+.auto-menu-cell.proposed { padding-top: 16px; }
+
+/* ── Táctil: asas y botones siempre visibles, objetivos más grandes ──────── */
+.drag-handle { touch-action: none; }
+
+@media (hover: none), (pointer: coarse) {
+  .postit .drag-handle { opacity: 1; }
+  /* En táctil los botones sueltos tapan el nombre: todo va al botón ⋯ del pie */
+  .board .postit .postit-actions { display: none; }
+  /* Despensa y recetas: botones bajo el nombre en lugar de encima */
+  .dishes-tray .postit-header { flex-direction: column; align-items: stretch; }
+  .dishes-tray .postit-actions { position: static; opacity: 1; justify-content: flex-end; margin-top: 4px; gap: 6px; }
+  .postit .postit-more-touch { display: flex; width: 28px; height: 28px; }
+  .postit-btn { width: 26px; height: 26px; }
+  .drag-handle {
+    color: var(--text-muted);
+    background: rgba(0,0,0,0.07);
+    padding: 5px 7px;
+    border-radius: 6px;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  .postit { -webkit-touch-callout: none; }
+  .context-submenu { position: static; box-shadow: none; border: none; padding: 0 0 0 14px; }
+  .context-menu-item { padding: 11px 12px; font-size: 14px; }
+}
+
+.postit-more-touch { display: none; }
+.context-menu-danger { color: var(--red); }
+
+/* ── Lista de la compra: fila unificada ──────────────────────────────────── */
+.shopping-drag-spacer { width: 14px; flex-shrink: 0; }
+.shopping-item-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.shopping-item-note {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: -2px;
+}
+.shopping-item.purchased .shopping-item-note { opacity: 0.5; }
+.shopping-item-remove {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  opacity: 0.45;
+  cursor: pointer;
+}
+.shopping-item-remove:hover { opacity: 1; background: var(--red-light); color: var(--red); }
+@media (hover: none), (pointer: coarse) {
+  .shopping-item { padding: 8px 6px; }
+  .shopping-item input[type="checkbox"] { width: 20px; height: 20px; }
+  .shopping-item-remove { width: 32px; height: 32px; opacity: 0.7; }
+  .shopping-drag-handle { padding: 6px 8px 6px 0; font-size: 18px; }
+}
+
+/* ── Despensa: ingredientes disponibles ──────────────────────────────────── */
+.pool-loc { font-size: 10.5px; font-weight: 700; color: var(--postit-text); opacity: 0.75; max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pantry-section { margin-top: 12px; }
+.pantry-section-title { font-size: 11px; font-weight: 800; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; letter-spacing: 0.04em; }
+.pantry-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.pantry-chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 6px 4px 10px;
+  border-radius: var(--radius-pill); font-size: 13px; box-shadow: var(--shadow-sm);
+}
+.pantry-chip-name { background: none; border: none; padding: 0; font: inherit; font-weight: 700; color: var(--postit-text); cursor: pointer; }
+.pantry-chip-note { font-size: 11px; color: var(--text-muted); }
+.pantry-chip-x { background: rgba(0,0,0,0.08); border: none; border-radius: 50%; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-muted); }
+.pantry-chip-x:hover { background: var(--red-light); color: var(--red); }
+
+/* ── Propuestas IA ───────────────────────────────────────────────────────── */
+.proposal-badges { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 4px; }
+.proposal-detail { margin: 6px 0; padding: 8px 10px; background: var(--surface2); border-radius: 8px; }
+.recipe-meta { font-size: 10px; font-weight: 700; margin-left: 4px; color: var(--postit-text); opacity: 0.8; }
