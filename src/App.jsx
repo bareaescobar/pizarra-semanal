@@ -361,7 +361,7 @@ function DroppableShoppingCat({ category, children }) {
   )
 }
 
-function DraggablePostit({ slot, ingredients, colorOverrides, onEdit, onDelete, onContextMenu, onOpen }) {
+function DraggablePostit({ slot, ingredients, colorOverrides, onEdit, onDelete, onContextMenu, onOpen, wholeDrag = false }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({ id: slot.id })
   const overrideCategory = colorOverrides?.[slot.id] || null
   const category = overrideCategory || getDominantCategory(slot.ingredient_ids, ingredients, slot.dish_name)
@@ -379,8 +379,9 @@ function DraggablePostit({ slot, ingredients, colorOverrides, onEdit, onDelete, 
     <div
       ref={setNodeRef}
       style={style}
-      className={`postit${isDragging ? ' dragging' : ''}`}
+      className={`postit${isDragging ? ' dragging' : ''}${wholeDrag ? ' whole-drag' : ''}`}
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onContextMenu(e, slot) }}
+      {...(wholeDrag ? { ...listeners, ...attributes } : {})}
     >
       <PostitContent
         slot={slot}
@@ -388,7 +389,7 @@ function DraggablePostit({ slot, ingredients, colorOverrides, onEdit, onDelete, 
         onDelete={onDelete}
         onOpen={onOpen}
         onMenu={(pos) => onContextMenu(pos, slot)}
-        dragHandleRef={setActivatorNodeRef}
+        dragHandleRef={wholeDrag ? undefined : setActivatorNodeRef}
         dragListeners={listeners}
         dragAttributes={attributes}
       />
@@ -2158,7 +2159,7 @@ function RecipeModal({ slot, onClose }) {
 // ─── LoginScreen ─────────────────────────────────────────────────────────────
 
 function LoginScreen() {
-  const [username, setUsername] = useState('')
+  const [username, setUsername] = useState(() => { try { return localStorage.getItem('lastUsername') || '' } catch { return '' } })
   const [password, setPassword] = useState('')
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -2178,6 +2179,7 @@ function LoginScreen() {
         if (data?.ok) ({ error: authErr } = await supabase.auth.signInWithPassword({ email, password }))
       }
       if (authErr) setError('Usuario o contraseña incorrectos.')
+      else { try { localStorage.setItem('lastUsername', uname) } catch {} }
     } catch (err) {
       setError('Error de conexión: ' + err.message)
     } finally {
@@ -2192,18 +2194,26 @@ function LoginScreen() {
         <p className="login-sub">Inicia sesión para gestionar tu pizarra</p>
         <input
           type="text"
+          id="username"
+          name="username"
           placeholder="Usuario"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
-          autoFocus
+          autoFocus={!username}
           autoComplete="username"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
           required
         />
         <input
           type="password"
+          id="password"
+          name="password"
           placeholder="Contraseña"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          autoFocus={!!username}
           autoComplete="current-password"
           required
         />
@@ -2228,7 +2238,16 @@ const AI_DEFAULT_PREFS = {
   available: [],
   avoid: '',
   notes: '',
+  styles: { cuisine: [], method: [], diet: [], occasion: [] },
 }
+
+// Estilos de cocina (inspirados en los filtros habituales de las webs de recetas: cocina, método/aparato, dieta, ocasión)
+const AI_STYLE_GROUPS = [
+  { key: 'cuisine', label: '🌍 Cocina del mundo', options: ['Mediterránea', 'Española tradicional', 'Italiana', 'Griega', 'Asiática', 'Japonesa', 'Mexicana', 'India', 'Árabe y marroquí'] },
+  { key: 'method', label: '🔥 Cómo se cocina', options: ['Al horno', 'A la plancha', 'Airfryer', 'Al vapor', 'Salteado / wok', 'Olla lenta', 'Olla a presión', 'Una sola olla o sartén', 'Sin cocinar (crudo)'] },
+  { key: 'diet', label: '🥗 Dieta y objetivo', options: ['Alto en proteína', 'Bajo en carbohidratos', 'Vegetariano', 'Pescetariano', 'Vegano', 'Sin gluten', 'Sin lactosa', 'Antiinflamatorio'] },
+  { key: 'occasion', label: '🍱 Ocasión', options: ['Para tupper', 'Batch cooking', 'Aprovechar sobras', 'Cena ligera', 'Plato único', 'Para invitados', 'Fin de semana con calma'] },
+]
 
 // Atajos para los casos más habituales de una pareja que come sano y a veces va con prisa
 const AI_PRESETS = [
@@ -2250,6 +2269,10 @@ function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClo
   const [error, setError] = useState(null)
 
   const set = (patch) => setPrefs((p) => ({ ...p, ...patch }))
+  const toggleStyle = (group, option) => setPrefs((p) => {
+    const cur = p.styles[group]
+    return { ...p, styles: { ...p.styles, [group]: cur.includes(option) ? cur.filter((x) => x !== option) : [...cur, option] } }
+  })
   const toggleType = (t) => set({ types: prefs.types.includes(t) ? prefs.types.filter((x) => x !== t) : [...prefs.types, t] })
   const applyPreset = (preset) => {
     if (preset.apply.__pantry) set({ available: availableIds })
@@ -2275,6 +2298,7 @@ function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClo
           available: availableNames,
           avoid: prefs.avoid,
           notes: prefs.notes,
+          styles: prefs.styles,
         },
         history: savedRecipes.map((r) => r.name).filter(Boolean),
       })
@@ -2339,7 +2363,6 @@ function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClo
                 <label className="form-label">Tiempo máximo</label>
                 <div className="type-selector">
                   {[[15, '⚡ 15 min'], [30, '30 min'], [45, '45 min']].map(([n, label]) => chip(prefs.maxTime === n, label, () => set({ maxTime: prefs.maxTime === n ? null : n })))}
-                  {chip(prefs.maxTime === null, 'Sin prisa', () => set({ maxTime: null }))}
                 </div>
               </div>
 
@@ -2355,6 +2378,26 @@ function AIRecipeProposalsModal({ savedRecipes, ingredients, availableIds, onClo
                 <label className="form-label">Tipo de plato</label>
                 <div className="type-selector">
                   {FOOD_TYPES.filter((f) => f.key !== 'Comer fuera').map((ft) => chip(prefs.types.includes(ft.label), `${ft.emoji} ${ft.label}`, () => toggleType(ft.label)))}
+                </div>
+              </div>
+
+              <div className="form-field">
+                <label className="form-label">Estilo de cocina</label>
+                <div className="style-groups">
+                  {AI_STYLE_GROUPS.map((g) => {
+                    const sel = prefs.styles[g.key]
+                    return (
+                      <details key={g.key} className="style-group">
+                        <summary>
+                          {g.label}
+                          {sel.length > 0 && <span className="style-count">{sel.length}</span>}
+                        </summary>
+                        <div className="type-selector">
+                          {g.options.map((o) => chip(sel.includes(o), o, () => toggleStyle(g.key, o)))}
+                        </div>
+                      </details>
+                    )
+                  })}
                 </div>
               </div>
 
@@ -2540,7 +2583,8 @@ export default function App() {
   }, [])
 
   async function handleLogout() {
-    await supabase.auth.signOut()
+    // 'local': cierra solo este dispositivo (el valor por defecto cierra la sesión en todos los dispositivos)
+    await supabase.auth.signOut({ scope: 'local' })
     initDone.current = false
     setCurrentUser(null)
   }
@@ -2710,10 +2754,11 @@ export default function App() {
   const [trayTab, setTrayTab] = useState('pool')
   const [pendingRecipeName, setPendingRecipeName] = useState(null)
   const [recipeSearch, setRecipeSearch] = useState('')
-  const [recipeSort, setRecipeSort] = useState('recent')
+  const [recipeSort, setRecipeSort] = useState(() => { try { return localStorage.getItem('recipeSort') || 'recent' } catch { return 'recent' } })
   const [selectedTag, setSelectedTag] = useState(null)
   const [assistant, setAssistant] = useState(null) // null | 'menu' | 'ideas'
-  const [recipeReverse, setRecipeReverse] = useState(false)
+  const [recipeReverse, setRecipeReverse] = useState(() => { try { return localStorage.getItem('recipeReverse') === '1' } catch { return false } })
+  useEffect(() => { try { localStorage.setItem('recipeSort', recipeSort); localStorage.setItem('recipeReverse', recipeReverse ? '1' : '0') } catch {} }, [recipeSort, recipeReverse])
   const [recipeFilters, setRecipeFilters] = useState({ maxTime: null, light: false, few: false, types: [] })
   const [recipeFiltersOpen, setRecipeFiltersOpen] = useState(false)
   const [dishIngMap, setDishIngMap] = useState({})
@@ -2724,9 +2769,22 @@ export default function App() {
   const isMobile = useIsMobile()
   const [mobileTab, setMobileTab] = useState('menu') // 'menu' | 'tray'
   const [mobileDay, setMobileDay] = useState(null)   // columna visible en la vista de un día
+  const [mobileView, setMobileViewRaw] = useState(() => { try { return localStorage.getItem('mobileView') === 'day' ? 'day' : 'week' } catch { return 'week' } })
+  const setMobileView = (v) => { setMobileViewRaw(v); try { localStorage.setItem('mobileView', v) } catch {} }
   const [planPicker, setPlanPicker] = useState(null) // { mode: 'recipe' | 'pool' | 'move' | 'copy', ... }
   const swipe = useRef(null)
+  const weekScrollRef = useRef(null)
   useEffect(() => { setMobileDay(null) }, [weekKey, startDayOfWeek])
+  // En la vista semanal del móvil se abre mostrando el día de hoy (si está en la semana visible)
+  useEffect(() => {
+    if (!isMobile || mobileView !== 'week' || mobileTab !== 'menu' || loading) return
+    const id = setTimeout(() => {
+      const sc = weekScrollRef.current
+      const today = sc?.querySelector('.board-day-header.today')
+      sc?.scrollTo({ left: today ? Math.max(0, today.offsetLeft - 42) : 0 })
+    }, 50)
+    return () => clearTimeout(id)
+  }, [isMobile, mobileView, mobileTab, weekKey, startDayOfWeek, loading])
 
   // La despensa mezcla platos e ingredientes disponibles
   const poolDishes = useMemo(() => poolItems.filter((p) => (p.kind || 'dish') === 'dish'), [poolItems])
@@ -3123,11 +3181,12 @@ export default function App() {
       time_min: p.time_min || null,
       light: p.light || null,
     }
+    const newTags = (p.tags || []).map((t) => String(t).trim().toLowerCase()).filter(Boolean)
     const existing = savedRecipes.find((r) => (r.name || '').trim().toLowerCase() === key)
     if (existing) {
-      await updateRecipe(existing.id, fields)
+      await updateRecipe(existing.id, { ...fields, tags: [...new Set([...(existing.tags || []), ...newTags])] })
     } else {
-      const row = { id: Date.now().toString() + Math.floor(Math.random() * 100), name, ...fields }
+      const row = { id: Date.now().toString() + Math.floor(Math.random() * 100), name, ...fields, tags: newTags }
       setSavedRecipes((prev) => [...prev, row])
       await dbInsert('v2_saved_recipes', row)
     }
@@ -3511,6 +3570,7 @@ export default function App() {
                             onDelete={handleDelete}
                             onContextMenu={(e, slot) => setContextMenu({ x: e.clientX, y: e.clientY, slot })}
                             onOpen={(s) => openRecipeByName(s.dish_name)}
+                            wholeDrag={isMobile && mobileView === 'week'}
                           />
                         ))}
                         <div className="board-cell-add">
@@ -3610,7 +3670,18 @@ export default function App() {
               ))}
             </div>
           ))}
-            {isMobile ? (
+            {isMobile && (
+              <div className="mobile-toolbar">
+                <div className="view-toggle" role="tablist">
+                  <button role="tab" aria-selected={mobileView === 'week'} className={mobileView === 'week' ? 'active' : ''} onClick={() => setMobileView('week')}>Semana</button>
+                  <button role="tab" aria-selected={mobileView === 'day'} className={mobileView === 'day' ? 'active' : ''} onClick={() => setMobileView('day')}>Día</button>
+                </div>
+                <button className="mobile-assistant-btn" onClick={() => setAssistant('menu')}>
+                  <Sparkles size={14} /> Asistente
+                </button>
+              </div>
+            )}
+            {isMobile && mobileView === 'day' ? (
               <div
                 className="mobile-day"
                 onTouchStart={(e) => { swipe.current = { x: e.touches[0].clientX, y: e.touches[0].clientY } }}
@@ -3648,9 +3719,6 @@ export default function App() {
                     {DAYS[(startDayOfWeek + selectedDay) % 7]}{' '}
                     {getDayDate(weekKey, startDayOfWeek + selectedDay).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}
                   </span>
-                  <button className="mobile-assistant-btn" onClick={() => setAssistant('menu')}>
-                    <Sparkles size={14} /> Asistente
-                  </button>
                 </div>
                 {SLOTS.map((slot) => (
                   <section key={slot.key} className="mobile-slot">
@@ -3660,7 +3728,8 @@ export default function App() {
                 ))}
               </div>
             ) : (
-            <div className="board">
+            <div className={isMobile ? 'week-scroll' : undefined} ref={weekScrollRef}>
+            <div className={`board${isMobile ? ' board-mobile' : ''}`}>
               <div className="board-header-empty" />
               {DAYS.map((_, i) => {
                 const date = getDayDate(weekKey, startDayOfWeek + i)
@@ -3684,6 +3753,7 @@ export default function App() {
                   {DAYS.map((_, i) => renderCell(i, slot))}
                 </React.Fragment>
               ))}
+            </div>
             </div>
             )}
         </div>{/* /board-wrapper */}
@@ -3876,7 +3946,7 @@ export default function App() {
                       onOpenDetail={() => setRecipeDetailId(recipe.id)}
                       onPlan={() => setPlanPicker({ mode: 'recipe', name: recipe.name })}
                       onCart={() => setCartRecipeId(recipe.id)}
-                      onSelect={() => { if (recipe.name) { setPendingRecipeName(recipe.name); setTrayTab('pool') } }}
+                      onSelect={() => { if (!recipe.name) return; if (isMobile) setPlanPicker({ mode: 'recipe', name: recipe.name }); else { setPendingRecipeName(recipe.name); setTrayTab('pool') } }}
                       onUpdate={(patch) => updateRecipe(recipe.id, patch)}
                       onDelete={() => deleteRecipe(recipe.id)}
                     />

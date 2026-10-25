@@ -2642,3 +2642,47 @@ html, body {
   .auto-menu-count { flex: 1 1 100%; order: 3; }
   .auto-menu-toolbar .auto-menu-link { padding: 6px 8px; }
 }
+
+/* ── Móvil: vista Semana (scroll horizontal, ≥3 días visibles) ───────────── */
+.mobile-toolbar { display: none; }
+.view-toggle { display: inline-flex; border: 1.5px solid var(--border); border-radius: var(--radius-pill); overflow: hidden; background: var(--surface2); }
+.view-toggle button { font: inherit; font-size: 13px; font-weight: 700; padding: 8px 16px; border: none; background: none; color: var(--text-muted); cursor: pointer; }
+.view-toggle button.active { background: var(--accent); color: #fff; }
+
+@media (max-width: 768px) {
+  .mobile-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+
+  .week-scroll { overflow-x: auto; overflow-y: visible; -webkit-overflow-scrolling: touch; margin: 0 -12px; padding: 0 12px 10px; scroll-snap-type: x proximity; scroll-padding-left: 42px; overscroll-behavior-x: contain; position: relative; }
+  .board.board-mobile {
+    grid-template-columns: 24px repeat(7, clamp(100px, 26vw, 150px));
+    min-width: max-content; gap: 6px;
+  }
+  .board-mobile .board-slot-label { position: sticky; left: 0; z-index: 3; background: var(--bg); font-size: 10px; letter-spacing: 0.06em; }
+  .board-mobile .board-header-empty { position: sticky; left: 0; z-index: 3; background: var(--bg); }
+  .board-mobile .board-day-header { scroll-snap-align: start; padding: 6px 4px; }
+  .board-mobile .board-cell { min-height: 120px; padding: 5px; gap: 5px; scroll-snap-align: start; }
+
+  /* Tarjetas estrechas: nombre legible, sin partir palabras, y pie compacto */
+  .board-mobile .postit { padding: 7px 6px 5px; border-radius: 10px; }
+  .board-mobile .postit-name { font-size: 13.5px; line-height: 1.2; word-break: normal; overflow-wrap: break-word; hyphens: auto; padding: 0 0 2px; }
+  .board-mobile .postit-footer { margin-top: 3px; gap: 4px; justify-content: space-between; }
+  .board-mobile .effort-dots { gap: 2px; }
+  .board-mobile .effort-dot { width: 6px; height: 6px; }
+  .board-mobile .postit-more-touch { width: 26px; height: 26px; }
+  .board-mobile .btn-add-slot { padding: 6px 2px; font-size: 11px; }
+  .board-mobile .btn-add-slot span { display: none; }
+
+  /* Arrastre con toda la tarjeta: pulsación larga; el scroll horizontal sigue libre */
+  .postit.whole-drag { touch-action: manipulation; -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
+  .postit.dragging { box-shadow: var(--shadow-lg); }
+}
+
+/* Estilos de cocina: grupos desplegables */
+.style-groups { display: flex; flex-direction: column; gap: 6px; }
+.style-group { border: 1.5px solid var(--border); border-radius: var(--radius); background: var(--surface2); padding: 0 10px; }
+.style-group[open] { background: var(--surface); border-color: var(--accent); padding-bottom: 10px; }
+.style-group summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--text); padding: 10px 0; list-style: none; display: flex; align-items: center; gap: 8px; }
+.style-group summary::-webkit-details-marker { display: none; }
+.style-group summary::after { content: '▾'; margin-left: auto; color: var(--text-muted); }
+.style-group[open] summary::after { content: '▴'; }
+.style-count { background: var(--accent); color: #fff; border-radius: 99px; font-size: 11px; padding: 0 7px; line-height: 18px; }
