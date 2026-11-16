@@ -254,6 +254,64 @@ Responde ÚNICAMENTE con este JSON (sin texto adicional):
     return { text: text.trim() }
   },
 
+  // Asistente de voz: un turno de conversación. El cliente manda el estado (borrador de despensa y menú,
+  // recetas candidatas, historial corto) y la función devuelve qué decir y qué cambios proponer.
+  // Nada se guarda aquí: el cliente enseña el borrador y el usuario confirma.
+  async voice_turn(b) {
+    const str = (v: unknown, n: number) => String(v ?? '').slice(0, n)
+    const days = list(b.days, 7)
+    const history = (Array.isArray(b.history) ? b.history : []).slice(-10).map((h: any) =>
+      `${h?.role === 'assistant' ? 'Asistente' : 'Usuario'}: ${str(h?.text, 400)}`).join('\n')
+    const recipes = (Array.isArray(b.recipes) ? b.recipes : []).slice(0, 70).map((r: any) =>
+      `- ${str(r?.n, 80)}${r?.t ? ` [${str(r.t, 30)}]` : ''}${r?.min ? ` ${Number(r.min) || ''} min` : ''}${r?.l ? ` ${str(r.l, 14)}` : ''}${r?.miss != null ? ` · faltan ${Number(r.miss) || 0}${Array.isArray(r.missing) && r.missing.length ? ` (${list(r.missing, 4).join(', ')})` : ''}` : ''}`).join('\n')
+    const menu = (Array.isArray(b.menu) ? b.menu : []).slice(0, 14).map((m: any) =>
+      `${days[Number(m?.day)] ?? m?.day} ${m?.slot === 'dinner' ? 'cena' : 'comida'}: ${str(m?.dish, 80)}`).join('; ')
+    const busy = list(b.busy, 14).join('; ')
+
+    const prompt = `Eres el asistente de voz de "Pizarra Semanal", una app para planificar el menú de una pareja que quiere comer sano y a veces tiene poco tiempo. Hablas en español de España, cercano y breve, porque tus respuestas se leen en voz alta: como máximo 2 frases cortas y una sola pregunta cada vez. Sin listas, sin emojis, sin markdown.
+
+Tu trabajo, de forma guiada:
+1. Despensa: que el usuario te cuente qué tiene en casa. Anota lo que diga (ingredientes sueltos, no recetas). Cuando parezca que ha terminado, resume brevemente y pregunta si falta algo.
+2. Menú: pregunta para qué días y comidas quiere menú (comida y/o cena), y si hay prisa, antojos o algo que evitar. Luego propón el menú, aprovechando lo que hay en la despensa y priorizando recetas de su lista con pocos ingredientes por comprar. Equilibra tipos (no repitas lo mismo seguido) y prefiere platos ligeros/rápidos si dice que tiene poco tiempo.
+3. Cierre: cuando el menú esté listo, resume en una frase y pregunta si lo guarda. Solo pon "save": true si el usuario ha dicho claramente que sí (guardar, vale, confírmalo, adelante) tras haberle preguntado. Nunca guardes por tu cuenta.
+
+Reglas:
+- Usa platos de la lista de recetas siempre que puedas, con su nombre exacto. Si propones algo que no está en la lista, es una idea nueva: úsalo solo si no hay nada adecuado y dilo.
+- No inventes lo que hay en la despensa: solo lo que el usuario diga. "pantry_add" y "pantry_remove" son solo cambios de este turno, en singular y minúsculas (p. ej. "huevos" → "huevo").
+- Si no has entendido bien algo (la voz a veces falla), pregunta en vez de adivinar.
+- "day" es el número del día (0 a ${Math.max(0, days.length - 1)}) según esta lista: ${days.map((d, i) => `${i}=${d}`).join(', ')}. "slot" es "lunch" (comida) o "dinner" (cena).
+- Huecos ya ocupados en el menú actual (no los pises salvo que el usuario lo pida): ${busy || 'ninguno'}.
+
+Despensa guardada: ${list(b.pantry, 200).join(', ') || 'vacía'}
+Borrador de despensa de esta conversación: ${list(b.draftPantry, 200).join(', ') || 'nada todavía'}
+Borrador del menú de esta conversación: ${menu || 'nada todavía'}
+Recetas del usuario (con lo que faltaría comprar según la despensa):
+${recipes || '(sin recetas)'}
+
+Conversación hasta ahora:
+${history || '(empieza ahora)'}
+Usuario: ${str(b.utterance, 1200)}
+
+Responde ÚNICAMENTE con este JSON:
+{"say": "lo que dices en voz alta", "pantry_add": ["ingrediente"], "pantry_remove": ["ingrediente"], "menu_set": [{"day": 0, "slot": "lunch", "dish": "nombre"}], "menu_clear": [{"day": 0, "slot": "dinner"}], "save": false}
+Deja vacíos los arrays si no hay cambios.`
+
+    const p = parseJson(await gemini(prompt, true, [], 0.5))
+    const slotOf = (v: unknown) => (v === 'dinner' ? 'dinner' : v === 'lunch' ? 'lunch' : null)
+    const dayOf = (v: unknown) => { const n = Number(v); return Number.isInteger(n) && n >= 0 && n < Math.max(1, days.length) ? n : null }
+    const cell = (m: any) => ({ day: dayOf(m?.day), slot: slotOf(m?.slot) })
+    return {
+      say: str(p.say, 500).trim() || 'No te he entendido bien, ¿puedes repetirlo?',
+      pantry_add: list(p.pantry_add, 40),
+      pantry_remove: list(p.pantry_remove, 40),
+      menu_set: (Array.isArray(p.menu_set) ? p.menu_set : []).slice(0, 14)
+        .map((m: any) => ({ ...cell(m), dish: str(m?.dish, 100).trim() }))
+        .filter((m: any) => m.day != null && m.slot && m.dish),
+      menu_clear: (Array.isArray(p.menu_clear) ? p.menu_clear : []).slice(0, 14).map(cell).filter((m: any) => m.day != null && m.slot),
+      save: p.save === true,
+    }
+  },
+
   async import_recipe(b) {
     const url = extractUrl(b.url, b.text)
     // El texto del usuario es lo que haya además del enlace (un "mira esta receta https://…" no cuenta como receta)

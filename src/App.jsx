@@ -38,6 +38,9 @@ import {
   MoreHorizontal,
   CalendarDays,
   CalendarPlus,
+  Mic,
+  Volume2,
+  VolumeX,
   Package,
   Settings,
 } from 'lucide-react'
@@ -2868,6 +2871,340 @@ function ImportRecipeModal({ initial, onClose, onAdd, onPlan, hidden = false, ta
 }
 
 
+// ─── Asistente de voz: despensa y menú guiados por voz ────────────────────────
+// La voz la ponen el navegador (reconocimiento y lectura); la IA solo ve texto. Todo lo que se dice va a un
+// borrador en pantalla y solo se guarda en la despensa y el tablero cuando el usuario lo confirma.
+
+const SpeechRec = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null
+const VOICE_GREETING = 'Hola. Cuéntame qué tienes en la despensa y vamos montando el menú.'
+
+// "huevos" ↔ "huevo", "tomates" ↔ "tomate"
+function findIngredientByName(catalog, name) {
+  const n = normalizeText(name).trim()
+  if (!n) return null
+  const variants = new Set([n, n + 's', n + 'es', n.replace(/(es|s)$/, '')])
+  return catalog.find((i) => variants.has(normalizeText(i.name).trim()))
+    || catalog.find((i) => normalizeText(i.name).startsWith(n + ' '))
+    || null
+}
+
+function pickSpanishVoice() {
+  const voices = window.speechSynthesis?.getVoices?.() || []
+  return voices.find((v) => /^es[-_]ES/i.test(v.lang)) || voices.find((v) => /^es/i.test(v.lang)) || null
+}
+
+function VoiceAssistantModal({ savedRecipes, pantryNames, ingredients, dishIngMap, slots, weekKey, nextWeekKey, startDayOfWeek, onApply, onPlanned, onClose, hidden = false, tabs = null }) {
+  const days = useMemo(() => Array.from({ length: 7 }, (_, i) => dayNameForIdx(i, startDayOfWeek)), [startDayOfWeek])
+  const [turns, setTurns] = useState([])
+  const [draftPantry, setDraftPantry] = useState([])
+  const [draftMenu, setDraftMenu] = useState([])
+  const [typed, setTyped] = useState('')
+  const [interim, setInterim] = useState('')
+  const [listening, setListening] = useState(false)
+  const [speaking, setSpeaking] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [guided, setGuided] = useState(false) // conversación continua: tras hablar el asistente, se abre el micrófono
+  const [muted, setMuted] = useState(false)
+  const [error, setError] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  // Los manejadores de voz viven más que cada render: se leen siempre los valores actuales desde aquí
+  const live = useRef({})
+  live.current = { turns, draftPantry, draftMenu, guided, muted, busy, hidden, pantryNames, savedRecipes, ingredients, dishIngMap, slots, weekKey, nextWeekKey, startDayOfWeek, days }
+  const recRef = useRef(null)
+  const reqRef = useRef(0)
+  const scrollRef = useRef(null)
+  const started = useRef(false)
+
+  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }) }, [turns, busy, interim])
+  useEffect(() => () => { // al cerrar: se apaga todo
+    try { recRef.current?.abort() } catch {}
+    try { window.speechSynthesis?.cancel() } catch {}
+  }, [])
+  // Con otra pestaña del Asistente abierta no se escucha ni se habla
+  useEffect(() => { if (hidden) stopAll() }, [hidden])
+
+  function stopListening() {
+    try { recRef.current?.abort() } catch {}
+    recRef.current = null
+    setListening(false)
+    setInterim('')
+  }
+  function stopAll() {
+    setGuided(false)
+    live.current.guided = false
+    stopListening()
+    try { window.speechSynthesis?.cancel() } catch {}
+    setSpeaking(false)
+  }
+
+  function startListening() {
+    if (!SpeechRec || live.current.hidden) return
+    stopListening()
+    try { window.speechSynthesis?.cancel() } catch {}
+    const rec = new SpeechRec()
+    rec.lang = 'es-ES'
+    rec.interimResults = true
+    rec.continuous = false
+    let finalText = ''
+    rec.onresult = (e) => {
+      let tmp = ''
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i]
+        if (r.isFinal) finalText += r[0].transcript
+        else tmp += r[0].transcript
+      }
+      setInterim((finalText + ' ' + tmp).trim())
+    }
+    rec.onerror = (e) => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        setError('El navegador no tiene permiso para usar el micrófono. Actívalo en los ajustes del sitio, o escribe tu mensaje.')
+        stopAll()
+      } else if (e.error === 'no-speech') {
+        // silencio: en modo guiado se vuelve a abrir una vez; si sigue sin oírse, se para
+        if (live.current.guided && !live.current.retried) { live.current.retried = true; setTimeout(startListening, 300) } else stopAll()
+      } else if (e.error !== 'aborted') {
+        setError('No he podido oírte bien (' + e.error + '). Prueba otra vez o escribe.')
+        stopAll()
+      }
+    }
+    rec.onend = () => {
+      setListening(false)
+      setInterim('')
+      if (recRef.current === rec) recRef.current = null
+      const text = finalText.trim()
+      if (text) { live.current.retried = false; send(text) }
+    }
+    recRef.current = rec
+    try { rec.start(); setListening(true); setError(null) } catch { setListening(false) }
+  }
+
+  function speak(text, then) {
+    const synth = window.speechSynthesis
+    if (!synth || live.current.muted) { then?.(); return }
+    synth.cancel()
+    const u = new SpeechSynthesisUtterance(text)
+    u.lang = 'es-ES'
+    const v = pickSpanishVoice()
+    if (v) u.voice = v
+    u.rate = 1.03
+    u.onstart = () => setSpeaking(true)
+    const done = () => { setSpeaking(false); then?.() }
+    u.onend = done
+    u.onerror = done
+    synth.speak(u)
+  }
+
+  // Tras hablar el asistente, en modo guiado se abre el micrófono para la respuesta
+  function afterSpeech() { if (live.current.guided && !live.current.hidden) startListening() }
+
+  function micOn() {
+    if (!SpeechRec) { setError('Este navegador no permite dictar por voz. Escribe tu mensaje abajo (en Chrome o Android funciona la voz).'); return }
+    setGuided(true)
+    live.current.guided = true
+    if (!started.current && live.current.turns.length === 0) {
+      started.current = true
+      setTurns([{ role: 'assistant', text: VOICE_GREETING }])
+      speak(VOICE_GREETING, afterSpeech)
+    } else startListening()
+  }
+
+  function buildContext() {
+    const L = live.current
+    const byId = Object.fromEntries(L.ingredients.map((i) => [i.id, i]))
+    const have = new Set([...L.pantryNames, ...L.draftPantry].flatMap((n) => {
+      const k = normalizeText(n).trim()
+      return [k, k + 's', k + 'es', k.replace(/(es|s)$/, '')]
+    }))
+    const recipes = L.savedRecipes.map((r) => {
+      const map = L.dishIngMap[(r.name || '').trim().toLowerCase()]
+      const ids = map ? (map[1] || Object.values(map)[0] || []) : []
+      const names = ids.map((id) => byId[id]?.name).filter(Boolean)
+      const missing = names.filter((n) => !have.has(normalizeText(n).trim()))
+      return { n: r.name, t: r.type || null, min: r.time_min || null, l: r.light || null, miss: names.length ? missing.length : null, missing }
+    })
+    // Primero las que más se pueden hacer con lo que hay; las que no tienen ingredientes guardados van detrás
+    recipes.sort((a, b) => (a.miss ?? 99) - (b.miss ?? 99) || (b.min ? 0 : 1) - (a.min ? 0 : 1))
+    const busy = []
+    for (let d = 0; d < 7; d++) {
+      const absIdx = (L.startDayOfWeek + d) % 7
+      const wk = L.startDayOfWeek + d >= 7 ? L.nextWeekKey : L.weekKey
+      for (const s of SLOTS) {
+        if (L.slots.some((x) => x.day_idx === absIdx && x.slot_key === s.key && x.week_key === wk)) busy.push(`${L.days[d]} ${s.label.toLowerCase()}`)
+      }
+    }
+    return { days: L.days, pantry: L.pantryNames, draftPantry: L.draftPantry, menu: L.draftMenu, recipes, busy }
+  }
+
+  async function send(raw) {
+    const text = (raw || '').trim()
+    if (!text || live.current.busy) return
+    const myReq = ++reqRef.current
+    const history = [...live.current.turns, { role: 'user', text }]
+    setTurns(history)
+    setTyped('')
+    setBusy(true)
+    live.current.busy = true
+    setError(null)
+    setSaved(false)
+    try {
+      const ctx = buildContext()
+      const r = await callAI('voice_turn', { ...ctx, history: history.slice(0, -1), utterance: text })
+      if (reqRef.current !== myReq) return
+      const norm = (s) => normalizeText(s).trim()
+      setDraftPantry((prev) => {
+        const out = [...prev]
+        for (const n of r.pantry_add) if (!out.some((x) => norm(x) === norm(n))) out.push(n)
+        return out.filter((x) => !r.pantry_remove.some((n) => norm(n) === norm(x)))
+      })
+      setDraftMenu((prev) => {
+        const key = (m) => `${m.day}-${m.slot}`
+        let out = prev.filter((m) => !r.menu_clear.some((c) => key(c) === key(m)))
+        for (const m of r.menu_set) out = [...out.filter((x) => key(x) !== key(m)), m]
+        return out
+      })
+      setTurns((t) => [...t, { role: 'assistant', text: r.say }])
+      setBusy(false)
+      live.current.busy = false
+      if (r.save) {
+        // El usuario ha dicho "guárdalo": se guarda el borrador tal como lo ve en pantalla
+        setGuided(false)
+        live.current.guided = false
+        speak(r.say)
+        setTimeout(() => commit(), 150)
+      } else speak(r.say, afterSpeech)
+    } catch (e) {
+      if (reqRef.current !== myReq) return
+      setBusy(false)
+      live.current.busy = false
+      setError(e.message)
+      stopAll()
+    }
+  }
+
+  async function commit() {
+    const L = live.current
+    if (saving || (!L.draftPantry.length && !L.draftMenu.length)) return
+    setSaving(true)
+    setGuided(false)
+    live.current.guided = false
+    stopListening()
+    try {
+      await onApply({ pantry: L.draftPantry, menu: L.draftMenu })
+      setSaved(true)
+      setDraftPantry([])
+      setDraftMenu([])
+      setTurns((t) => [...t, { role: 'assistant', text: 'Hecho, ya está guardado.' }])
+    } catch (e) {
+      setError('No se pudo guardar: ' + e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function reset() {
+    reqRef.current += 1
+    stopAll()
+    setTurns([])
+    setDraftPantry([])
+    setDraftMenu([])
+    setSaved(false)
+    setError(null)
+    setBusy(false)
+    live.current.busy = false
+    started.current = false
+  }
+
+  const menuByCell = (d, k) => draftMenu.find((m) => m.day === d && m.slot === k)
+  const hasDraft = draftPantry.length > 0 || draftMenu.length > 0
+  const status = busy ? 'Pensando…' : listening ? 'Te escucho…' : speaking ? 'Hablando…' : guided ? '' : ''
+
+  return (
+    <div className="modal-backdrop" style={hidden ? { display: 'none' } : undefined} onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal voice-modal">
+        <div className="modal-header">
+          {tabs || <h3>🎙️ Asistente de voz</h3>}
+          <button className="modal-close" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body voice-body">
+          <div className="voice-chat" ref={scrollRef} aria-live="polite">
+            {turns.length === 0 && (
+              <p className="import-lead">
+                Pulsa el micrófono y cuéntame qué tienes en casa; después te ayudo a montar el menú de la semana, hablando. Todo queda en un borrador y no se guarda hasta que lo confirmes.
+              </p>
+            )}
+            {turns.map((t, i) => <div key={i} className={`voice-turn voice-${t.role}`}>{t.text}</div>)}
+            {interim && <div className="voice-turn voice-user voice-interim">{interim}</div>}
+            {busy && <div className="voice-turn voice-assistant voice-thinking"><span className="spinner" /> {status}</div>}
+          </div>
+
+          {error && <div className="import-msg import-msg-error">{error}</div>}
+
+          <div className="voice-draft">
+            <div className="voice-draft-block">
+              <div className="voice-draft-title">Despensa (borrador) {draftPantry.length > 0 && <span>· {draftPantry.length}</span>}</div>
+              {draftPantry.length === 0 ? <span className="import-sub">Aquí irá lo que me cuentes que tienes.</span> : (
+                <div className="import-ings">
+                  {draftPantry.map((n) => (
+                    <span key={n} className="import-ing">{titleCase(n)}
+                      <button type="button" aria-label={`Quitar ${n}`} onClick={() => setDraftPantry((p) => p.filter((x) => x !== n))}>×</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="voice-draft-block">
+              <div className="voice-draft-title">Menú (borrador)</div>
+              {draftMenu.length === 0 ? <span className="import-sub">Aquí irá el menú que vayamos montando.</span> : (
+                <div className="voice-menu">
+                  {days.map((dn, d) => SLOTS.map((s) => {
+                    const m = menuByCell(d, s.key)
+                    if (!m) return null
+                    const known = savedRecipes.some((r) => normalizeText(r.name).trim() === normalizeText(m.dish).trim())
+                    return (
+                      <div key={`${d}-${s.key}`} className="voice-menu-row">
+                        <span className="voice-menu-cell">{dn.slice(0, 3)} · {s.label}</span>
+                        <span className="voice-menu-dish">{titleCase(m.dish)}{!known && <em> idea nueva</em>}</span>
+                        <button type="button" aria-label={`Quitar ${m.dish}`} onClick={() => setDraftMenu((p) => p.filter((x) => x !== m))}>×</button>
+                      </div>
+                    )
+                  }))}
+                </div>
+              )}
+            </div>
+          </div>
+          {saved && (
+            <div className="proposal-next">✓ Guardado en la despensa y en el tablero.
+              <button className="btn btn-primary" type="button" onClick={onPlanned}>Ver el tablero</button>
+            </div>
+          )}
+        </div>
+
+        <div className="voice-controls">
+          <form className="voice-input" onSubmit={(e) => { e.preventDefault(); send(typed) }}>
+            <input className="form-input" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="…o escribe aquí" aria-label="Escribir un mensaje" disabled={busy} />
+            <button className="btn btn-ghost" type="submit" disabled={busy || !typed.trim()}>Enviar</button>
+          </form>
+          <div className="voice-actions">
+            <button type="button" className={`voice-mic${listening ? ' on' : ''}${guided && !listening ? ' wait' : ''}`} onClick={() => (guided || listening ? stopAll() : micOn())} aria-pressed={guided || listening} aria-label={guided || listening ? 'Parar la conversación' : 'Empezar a hablar'}>
+              {guided || listening ? <X size={22} /> : <Mic size={22} />}
+              <span>{listening ? 'Te escucho…' : speaking ? 'Hablando…' : guided ? 'Parar' : 'Hablar'}</span>
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={() => { setMuted((m) => !m); try { window.speechSynthesis?.cancel() } catch {} setSpeaking(false) }} aria-pressed={muted} title="Silenciar o activar la voz del asistente">
+              {muted ? <VolumeX size={15} /> : <Volume2 size={15} />} {muted ? 'Sin voz' : 'Con voz'}
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={reset} disabled={!turns.length && !hasDraft}>Empezar de nuevo</button>
+            <button type="button" className="btn btn-primary" onClick={commit} disabled={!hasDraft || saving}>
+              {saving ? 'Guardando…' : 'Guardar'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Asistente (menú de la semana + ideas de recetas) ─────────────────────────
 
 function AssistantTabs({ active, onChange }) {
@@ -2881,6 +3218,9 @@ function AssistantTabs({ active, onChange }) {
       </button>
       <button role="tab" aria-selected={active === 'import'} className={active === 'import' ? 'active' : ''} onClick={() => onChange('import')}>
         🔗 Importar
+      </button>
+      <button role="tab" aria-selected={active === 'voice'} className={active === 'voice' ? 'active' : ''} onClick={() => onChange('voice')}>
+        🎙️ Voz
       </button>
     </div>
   )
@@ -3166,7 +3506,7 @@ export default function App() {
   const [recipeSearch, setRecipeSearch] = useState('')
   const [recipeSort, setRecipeSort] = useState(() => { try { return localStorage.getItem('recipeSort') || 'recent' } catch { return 'recent' } })
   const [selectedTag, setSelectedTag] = useState(null)
-  const [assistant, setAssistant] = useState(null) // null | 'menu' | 'ideas' | 'import'
+  const [assistant, setAssistant] = useState(null) // null | 'menu' | 'ideas' | 'import' | 'voice'
   const [importInitial, setImportInitial] = useState(null) // { url, text, nonce } de un enlace compartido
   const [recipeReverse, setRecipeReverse] = useState(() => { try { return localStorage.getItem('recipeReverse') === '1' } catch { return false } })
   useEffect(() => { try { localStorage.setItem('recipeSort', recipeSort); localStorage.setItem('recipeReverse', recipeReverse ? '1' : '0') } catch {} }, [recipeSort, recipeReverse])
@@ -3656,6 +3996,32 @@ export default function App() {
       }
     }
     showToast('Semana generada ✓')
+  }
+
+  // Lo que se ha dicho al asistente de voz, ya confirmado: ingredientes a la despensa y platos al tablero
+  async function handleVoiceApply({ pantry, menu }) {
+    let catalog = [...ingredients]
+    const ids = []
+    for (const name of pantry) {
+      let match = findIngredientByName(catalog, name)
+      if (!match) {
+        const label = name.trim().charAt(0).toUpperCase() + name.trim().slice(1)
+        match = await dbInsert('v2_ingredients', { name: label, category: 'Otros', is_custom: true })
+        handleIngredientAdded(match)
+        catalog = [...catalog, match]
+      }
+      if (!ids.includes(match.id)) ids.push(match.id)
+    }
+    if (ids.length) await handleSavePantry({ mode: 'ingredient', ingredientIds: ids, location: null, note: null })
+    for (const m of menu) {
+      const known = savedRecipes.find((r) => normalizeText(r.name).trim() === normalizeText(m.dish).trim())
+      try {
+        await handleSaveDish({ dishName: known ? known.name : m.dish, effort: 1, selectedIds: null, dayIdx: m.day, slotKey: m.slot })
+      } catch (e) {
+        console.error('Error al guardar plato del asistente de voz:', e)
+      }
+    }
+    showToast('Guardado ✓')
   }
 
   function handleDragStart({ active }) {
@@ -4693,6 +5059,24 @@ export default function App() {
           onClose={() => setAssistant(null)}
           onAdd={handleAddProposal}
           onPlan={(name) => setPlanPicker({ mode: 'recipeDirect', name })}
+        />
+      )}
+
+      {assistant && (
+        <VoiceAssistantModal
+          hidden={assistant !== 'voice'}
+          tabs={<AssistantTabs active={assistant} onChange={setAssistant} />}
+          savedRecipes={savedRecipes}
+          pantryNames={pantryIngredients.map((p) => p.dish_name).filter(Boolean)}
+          ingredients={ingredients}
+          dishIngMap={dishIngMap}
+          slots={slots}
+          weekKey={weekKey}
+          nextWeekKey={nextWeekKey}
+          startDayOfWeek={startDayOfWeek}
+          onApply={handleVoiceApply}
+          onPlanned={() => setAssistant(null)}
+          onClose={() => setAssistant(null)}
         />
       )}
 
