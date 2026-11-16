@@ -2878,13 +2878,21 @@ function ImportRecipeModal({ initial, onClose, onAdd, onPlan, hidden = false, ta
 const SpeechRec = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null
 const VOICE_GREETING = 'Hola. Cuéntame qué tienes en la despensa y vamos montando el menú.'
 
-// "huevos" ↔ "huevo", "tomates" ↔ "tomate"
+// Palabras con significado de un nombre, sin tildes, plurales ni "de/con/en…": "pechuga de pollo" ≈ "Pollo (pechuga)"
+function ingredientTokens(name) {
+  return normalizeText(name).replace(/[()/,.]/g, ' ').split(/\s+/)
+    .filter((w) => w && !['de', 'del', 'la', 'el', 'los', 'las', 'con', 'en', 'para', 'y', 'a', 'al'].includes(w))
+    .map((w) => (w.length > 3 ? w.replace(/(es|s)$/, '') : w))
+}
+
 function findIngredientByName(catalog, name) {
-  const n = normalizeText(name).trim()
-  if (!n) return null
-  const variants = new Set([n, n + 's', n + 'es', n.replace(/(es|s)$/, '')])
-  return catalog.find((i) => variants.has(normalizeText(i.name).trim()))
-    || catalog.find((i) => normalizeText(i.name).startsWith(n + ' '))
+  const q = ingredientTokens(name)
+  if (!q.length) return null
+  const qs = new Set(q)
+  const rows = catalog.map((i) => ({ i, t: new Set(ingredientTokens(i.name)) }))
+  // 1) mismas palabras; 2) el del catálogo solo añade una palabra ("lentejas cocidas" → "Lentejas cocidas en conserva")
+  return rows.find(({ t }) => t.size === qs.size && q.every((w) => t.has(w)))?.i
+    || rows.filter(({ t }) => t.size === qs.size + 1 && q.every((w) => t.has(w))).sort((a, b) => a.i.name.length - b.i.name.length)[0]?.i
     || null
 }
 
